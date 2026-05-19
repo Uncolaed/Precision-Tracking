@@ -29,3 +29,7 @@ venv/
 # Secrets or local config
 secrets.py
 .env
+
+# OS files
+.DS_Store
+Thumbs.db
