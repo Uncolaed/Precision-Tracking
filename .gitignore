@@ -1,0 +1,31 @@
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual environments
+venv/
+.env/
+
+# Model files can be huge, I will document them instead of pushing them
+*.pt
+*.onnx
+*.engine
+*.bin
+*.xml
+
+# OpenCV / camera test outputs
+*.avi
+*.mp4
+*.mkv
+*.jpg
+*.png
+
+# System/editor files
+.vscode/
+.idea/
+.DS_Store
+
+# Secrets or local config
+secrets.py
+.env
