@@ -5,8 +5,8 @@ from pathlib import Path
 
 TESTS = {
     "1": ("UART manual test", "test_uart_manual.py"),
-    "2": ("Camera test", "test_camera.py"),
-    "3": ("Model loading test", "test_model_load.py"),
+    "2": ("Camera test", "test_pi_camera.py"),
+    "3": ("Model loading test", "test_yolo.py"),
 }
 
 
