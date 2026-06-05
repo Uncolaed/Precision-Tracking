@@ -6,7 +6,7 @@ import cv2
 from ultralytics import YOLO
 
 try:
-    from kalman import CentroidKalman
+    from .kalman import CentroidKalman
     KALMAN_AVAILABLE = True
 except ImportError:
     KALMAN_AVAILABLE = False
