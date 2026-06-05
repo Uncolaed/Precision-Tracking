@@ -1,289 +1,340 @@
-# Precision-Tracking
+# Precision Tracking
 
-A real-time object detection and autonomous tracking system for a Raspberry Pi-based robotic turret/arm. Uses YOLOv8 (OpenVINO int8 model) for detection, OpenCV trackers for temporal tracking, Kalman filtering for smooth centroid estimation, and PD control for servo positioning.
+Real-time UAV detection and servo tracking for a Raspberry Pi turret/arm.
 
-## Features
+This project uses a Raspberry Pi camera, a custom YOLO OpenVINO model, OpenCV tracking, optional Kalman smoothing, and a PD controller to keep a detected target centered in the camera frame. Servo movement is handled by an STM32 board over UART.
 
-- 🎯 **Real-time Detection**: YOLOv8 inference on Raspberry Pi via OpenVINO
-- 📍 **Robust Tracking**: Combines DetectionSmoother + OpenCV trackers (CSRT/KCF)
-- 🔄 **Motion Smoothing**: Kalman filter for jitter-free tracking
-- 🎮 **Dual Control Modes**: Autonomous target-following or manual keyboard control
-- 📡 **UART Interface**: Serial communication to STM32 microcontroller for servo control
-- 🖼️ **Live Visualization**: Real-time debug overlay with state, FPS, detection zones
+## What It Does
 
-## Quick Start
+- Detects a target with a custom YOLO model exported for OpenVINO.
+- Locks onto the best target near the center of the camera frame.
+- Tracks the target between detection frames using an OpenCV tracker.
+- Rechecks with YOLO to correct tracker drift.
+- Smooths target position with an optional Kalman filter.
+- Converts target offset into base and arm servo commands.
+- Supports AUTO tracking and MANUAL keyboard control.
+- Sends simple text commands to STM32 over UART.
 
-### Prerequisites
+## System Overview
 
-- **Hardware**: Raspberry Pi (4B+ recommended) + Pi Camera + STM32-based servo controller
-- **Python**: 3.8+
-- **OS**: Raspberry Pi OS (64-bit recommended)
+```mermaid
+flowchart TD
+    Camera["Pi Camera<br/>640x480 @ 30 FPS"] --> Main["src.main<br/>runtime loop"]
+    Main --> YOLO["YOLO OpenVINO detection<br/>models/galactic_int8_openvino_model"]
+    YOLO --> Smoother["DetectionSmoother<br/>short TTL + hit count"]
+    Smoother --> TargetPick["Pick target closest<br/>to frame center"]
+    TargetPick --> Tracker["OpenCV tracker<br/>CSRT/KCF/MOSSE"]
+    Tracker --> Kalman["Optional Kalman filter<br/>centroid smoothing"]
+    Kalman --> PD["PD controller<br/>normalized x/y error"]
+    PD --> UART["UART text commands<br/>/dev/serial0 @ 9600"]
+    UART --> STM32["STM32 firmware<br/>ai_servo.ino"]
+    STM32 --> Servos["Continuous rotation servos<br/>base + arm"]
+```
 
-### Installation
+## Runtime State Machine
 
-1. **Clone the repository**
-   ```bash
-   git clone <repo-url>
-   cd Precision-Tracking
-   ```
+```mermaid
+stateDiagram-v2
+    [*] --> IDLE
+    IDLE --> LOCKED: stable detection found
+    LOCKED --> LOCKED: tracker OK
+    LOCKED --> LOCKED: YOLO correction / snap
+    LOCKED --> LOST: tracker misses too many frames
+    LOST --> LOCKED: target reacquired near trusted box
+    LOST --> IDLE: recovery hold expires
+    LOCKED --> IDLE: reset or mode switch
+    LOST --> IDLE: reset or mode switch
+    IDLE --> [*]: quit
+```
 
-2. **Create virtual environment**
-   ```bash
-   python3 -m venv venv
-   source venv/bin/activate  # Linux/Pi
-   # or: venv\Scripts\activate  # Windows
-   ```
+## Control Pipeline
 
-3. **Install dependencies**
-   ```bash
-   pip install --upgrade pip
-   pip install -r requirements.txt
-   ```
+```mermaid
+flowchart LR
+    Target["Target center<br/>(cx, cy)"] --> Error["Frame error<br/>relative to center"]
+    Error --> Deadband{"Inside<br/>deadband?"}
+    Deadband -- yes --> Stop["Stop axis"]
+    Deadband -- no --> PD["PD update"]
+    PD --> Direction["Direction + speed"]
+    Direction --> Command["base cw 30<br/>arm ccw 20"]
+    Command --> STM32["STM32 parses text"]
+    STM32 --> PWM["Servo PWM<br/>1000-2000 us"]
+```
 
-   **Optional**: For Kalman filtering smoothness, ensure `filterpy` is installed:
-   ```bash
-   pip install filterpy
-   ```
+## Repository Layout
 
-### Running the Tracker
+```text
+Precision-Tracking/
+  src/
+    main.py          Main camera, detection, tracking, control loop
+    config.py        Central tuning and hardware settings
+    camera.py        Pi Camera setup and frame capture
+    detection.py     YOLO inference and detection smoothing
+    tracking.py      OpenCV tracker setup and lock state helpers
+    kalman.py        Optional 2D centroid Kalman filter
+    controller.py    PD controller and UART command sender
+    display.py       OpenCV debug overlay
+    utils.py         Geometry and math helpers
+  models/
+    galactic_int8_openvino_model/
+      metadata.yaml  Custom UAV detector metadata
+  stm32_firmware/
+    ai_servo.ino     STM32 servo controller firmware
+  tests/
+    run_tests.py     Manual hardware test launcher
+    test_pi_camera.py
+    test_uart_manual.py
+    test_yolo.py
+  legacy/
+    fianl_auto_manual_tracker_base_arm.py
+```
+
+## Hardware
+
+Recommended setup:
+
+- Raspberry Pi 4B or newer.
+- Raspberry Pi Camera connected through CSI.
+- STM32 board connected to the Raspberry Pi UART.
+- Two continuous rotation servos:
+  - base rotation servo
+  - arm tilt servo
+
+Default UART wiring assumed by the firmware:
+
+```text
+Raspberry Pi TX  -> STM32 PA10 RX
+Raspberry Pi RX  -> STM32 PA9 TX
+Raspberry Pi GND -> STM32 GND
+```
+
+Servo pins in `stm32_firmware/ai_servo.ino`:
+
+```cpp
+#define BASE_SERVO_PIN PA0
+#define ARM_SERVO_PIN  PA1
+```
+
+## UART Protocol
+
+The Python code sends newline-terminated text commands, not binary packets.
+
+Examples:
+
+```text
+base cw 30
+base ccw 30
+base stop
+arm cw 25
+arm ccw 25
+arm stop
+all stop
+```
+
+The STM32 firmware accepts the same commands from both USB serial and Raspberry Pi UART, which makes it easy to test manually before running the full tracker.
+
+## Configuration
+
+Most tuning lives in `src/config.py`.
+
+Common settings:
+
+```python
+TARGET_FPS = 30
+FRAME_W = 640
+FRAME_H = 480
+
+MODEL_PATH = str(PROJECT_ROOT / "models" / "galactic_int8_openvino_model")
+CONF = 0.45
+IMGSZ = 640
+
+TRACKER_TYPE = "CSRT"
+DETECT_EVERY_N = 2
+USE_KALMAN = True
+
+ENABLE_UART = True
+SERIAL_PORT = "/dev/serial0"
+BAUD_RATE = 9600
+
+KP_X = 0.50
+KD_X = 0.10
+KP_Y = 0.50
+KD_Y = 0.10
+```
+
+Direction tuning:
+
+```python
+BASE_LEFT_DIR = "ccw"
+BASE_RIGHT_DIR = "cw"
+ARM_UP_DIR = "cw"
+ARM_DOWN_DIR = "ccw"
+
+AUTO_BASE_POSITIVE_X_DIR = "cw"
+AUTO_ARM_POSITIVE_Y_DIR = "cw"
+```
+
+If a servo moves the wrong way, change the direction strings in `config.py` instead of changing the controller logic.
+
+## Installation
+
+Create a virtual environment:
+
+```bash
+python3 -m venv venv
+source venv/bin/activate
+python -m pip install --upgrade pip
+```
+
+Install the runtime packages you need for your platform. The repository currently includes `requirements_from_old_venv.txt`, which was generated from an old environment and may include packages that are unnecessary or unsuitable for Raspberry Pi.
+
+Typical packages:
+
+```bash
+pip install ultralytics openvino opencv-contrib-python numpy scipy filterpy pyserial picamera2
+```
+
+On Raspberry Pi OS, `picamera2` is often installed through the system packages instead of pip.
+
+## Running
+
+From the repository root:
 
 ```bash
 python -m src.main
 ```
 
-**Keyboard Controls**:
-- `m` - Switch between AUTO/MANUAL modes
-- `r` - Reset tracker state
-- `WASD` - Manual movement (MANUAL mode only)
-- `SPACE` - Stop manual movement
-- `+/-` - Adjust manual speed
-- `q` / `ESC` - Quit application
+Keyboard controls:
 
-## Configuration
+```text
+m       switch AUTO/MANUAL mode
+r       reset tracking state
+q/ESC   quit
 
-All parameters are managed in [`src/config.py`](src/config.py). Key settings:
-
-### Camera & Detection
-```python
-TARGET_FPS = 30              # Target frame rate
-FRAME_W, FRAME_H = 640, 480  # Resolution
-CONF = 0.45                  # YOLO confidence threshold
-IMGSZ = 640                  # YOLO input size
-MODEL_PATH = "..."           # Auto-resolved from PROJECT_ROOT
+Manual mode:
+w       arm up
+a       base left
+s       arm down
+d       base right
+SPACE   stop all
++/-     adjust manual speed
 ```
 
-### Serial/UART Communication
-```python
-ENABLE_UART = True
-SERIAL_PORT = "/dev/serial0"  # Raspberry Pi default; change for other systems
-BAUD_RATE = 9600
-UART_REFRESH_SECONDS = 0.40
+## Manual Hardware Tests
+
+Run the test launcher:
+
+```bash
+python tests/run_tests.py
 ```
 
-**⚠️ Hard-coded Paths**:
-- `SERIAL_PORT` defaults to `/dev/serial0` (Raspberry Pi UART0)
-- **To override**: Either edit `config.py` directly or set environment variable:
-  ```bash
-  export SERIAL_PORT="/dev/ttyUSB0"  # For USB serial adapter
-  python -m src.main
-  ```
-  (Note: Environment variable support requires code modification if not already implemented)
+Available tests:
 
-### Tracking & Control
-```python
-TRACKER_TYPE = "CSRT"           # or "KCF", "MOSSE"
-USE_KALMAN = True               # Enable/disable Kalman filtering
-KP_X, KD_X = 0.50, 0.10         # PD gains (horizontal)
-KP_Y, KD_Y = 0.50, 0.10         # PD gains (vertical)
-AUTO_START_MODE = "AUTO"         # Start in AUTO or MANUAL
+- UART manual command sender.
+- Pi Camera preview and FPS check.
+- YOLO camera detection demo.
+
+These are hardware smoke tests, not automated unit tests.
+
+## Model
+
+The bundled model metadata says it is a custom Ultralytics detection model with one class:
+
+```yaml
+names:
+  0: uav
 ```
 
-See [`src/config.py`](src/config.py) for all 50+ parameters.
+The configured model path is:
 
-## Architecture
-
+```text
+models/galactic_int8_openvino_model
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  Pi Camera (640×480 @ 30 FPS)                               │
-└────────────────────────┬────────────────────────────────────┘
-                         │
-                         ▼
-            ┌────────────────────────┐
-            │  YOLO Detection        │
-            │  (OpenVINO int8)       │
-            └────────────┬───────────┘
-                         │
-                         ▼
-        ┌────────────────────────────────────┐
-        │  DetectionSmoother                 │
-        │  (Temporal stability)              │
-        └────────────┬───────────────────────┘
-                     │
-        ┌────────────┴──────────────┐
-        │                           │
-        ▼                           ▼
-   ┌─────────────┐           ┌──────────────┐
-   │ OpenCV      │           │ Kalman       │
-   │ Tracker     │           │ Filter       │
-   └─────┬───────┘           └──────┬───────┘
-         │                          │
-         └──────────┬───────────────┘
-                    │
-                    ▼
-        ┌────────────────────────┐
-        │  PD Controller         │
-        │  (Error → Servo Cmd)   │
-        └────────────┬───────────┘
-                     │
-                     ▼
-    ┌────────────────────────────────┐
-    │  UART Serializer               │
-    │  → STM32 Microcontroller       │
-    └────────────┬───────────────────┘
-                 │
-                 ▼
-    ┌────────────────────────┐
-    │  Servo Motors          │
-    │  (Base rotation, Arm)  │
-    └────────────────────────┘
-```
-
-### Module Overview
-
-| Module | Purpose |
-|--------|---------|
-| `main.py` | Main event loop, orchestrates all components |
-| `camera.py` | Pi Camera initialization and frame capture |
-| `detection.py` | YOLO inference, detection smoothing |
-| `tracking.py` | OpenCV tracker lifecycle, state machine |
-| `kalman.py` | Constant-velocity Kalman filter (2D centroid) |
-| `controller.py` | PD control + UART communication |
-| `display.py` | Real-time visualization and debug overlays |
-| `config.py` | Centralized configuration parameters |
-| `utils.py` | Helper functions (geometry, math) |
-
-## Hardware Setup
-
-### Raspberry Pi
-- **Recommended**: Pi 4B 8GB with active cooling
-- **Minimum**: Pi 3B+ (slower inference)
-- **OS**: Raspberry Pi OS (64-bit Bullseye or later)
-- **Camera**: Pi Camera v2 or v3 (connected to CSI ribbon)
-
-### Serial Connection to STM32
-- **Default**: UART0 (`/dev/serial0`) on Raspberry Pi GPIO14/15
-- **Alternate**: USB serial adapter (`/dev/ttyUSB0`)
-  
-Configure in `config.py`:
-```python
-SERIAL_PORT = "/dev/ttyUSB0"
-BAUD_RATE = 9600
-```
-
-### Protocol
-The controller sends 4-byte commands via UART to the STM32:
-```
-[direction_base] [direction_arm] [speed] [checksum]
-```
-(Exact protocol defined in `stm32_firmware/ai_servo.ino`)
 
 ## Troubleshooting
 
-### "UART disabled" or "Serial port not found"
-**Solution**: 
-1. Verify serial device exists: `ls /dev/serial* /dev/ttyUSB*`
-2. Check permissions: `sudo usermod -a -G dialout $USER` (then logout/login)
-3. Update `SERIAL_PORT` in `config.py` to the correct device
+### UART does not open
 
-### "Kalman disabled - filterpy not installed"
-**Solution**: `pip install filterpy`
+Check the configured serial device:
 
-### "Tracker not available - install opencv-contrib-python"
-**Solution**: `pip install opencv-contrib-python`
-
-### "No camera detected"
-**Solution**:
-1. Enable camera: `sudo raspi-config` → Interface → Camera → Enable
-2. Reboot: `sudo reboot`
-3. Test: `libcamera-hello --list-cameras`
-
-### Low FPS (<20)
-**Solution**:
-1. Reduce `FRAME_W, FRAME_H` in `config.py`
-2. Increase `IMGSZ` (may reduce accuracy)
-3. Disable `SHOW_ALL_DETECTIONS` (less drawing overhead)
-4. Ensure thermal throttling isn't occurring: `vcgencmd measure_clock arm`
-
-### Jerky servo movement
-**Solution**: 
-1. Enable `USE_KALMAN = True` (smooths centroid)
-2. Tune PD gains: increase `KD_X`, `KD_Y` to reduce overshoot
-3. Reduce detection threshold `CONF` for more consistent detections
-
-## Development
-
-### Running Tests
 ```bash
-python -m pytest tests/
+ls /dev/serial* /dev/ttyUSB*
 ```
 
-### Adding New Tracker Types
-Edit [`src/tracking.py`](src/tracking.py):
+If you use a USB serial adapter, update:
+
 ```python
-def make_tracker(kind="CSRT"):
-    # Add new elif branches for additional tracker types
+SERIAL_PORT = "/dev/ttyUSB0"
 ```
 
-### Profiling Performance
+Also make sure the user has serial permissions:
+
 ```bash
-python -m cProfile -s cumtime -m src.main | head -30
+sudo usermod -a -G dialout $USER
 ```
 
-## STM32 Firmware
+Log out and back in after changing groups.
 
-See [`stm32_firmware/ai_servo.ino`](stm32_firmware/ai_servo.ino) for the microcontroller code. Upload via:
+### Camera does not start
+
+Check that the camera is detected:
+
 ```bash
-# On the STM32 development machine (not Pi)
-arduino-cli compile --fqbn <board> stm32_firmware/ai_servo.ino
-arduino-cli upload --fqbn <board> --port /dev/ttyUSB0 stm32_firmware/ai_servo.ino
+libcamera-hello --list-cameras
 ```
 
-## Performance Metrics
+Verify the ribbon cable and camera support in Raspberry Pi OS.
 
-Typical performance on Raspberry Pi 4B (8GB):
-- **Detection FPS**: 15-20 FPS (YOLOv8 inference)
-- **Tracking FPS**: 28-30 FPS (lightweight OpenCV tracker)
-- **Latency**: ~150-200ms (camera → UART output)
-- **Power**: ~5-10W sustained (Pi + servos)
+### Tracker type is unavailable
 
-## Known Limitations
+Install OpenCV contrib:
 
-- Single-target tracking only (designed for one object)
-- Kalman filter assumes constant velocity (works well for slow targets)
-- No re-identification after extended occlusions
-- Hard-coded SERIAL_PORT (see Configuration section)
-- Limited to Pi Camera; no multi-camera support
+```bash
+pip install opencv-contrib-python
+```
 
-## Future Improvements
+If CSRT is too slow, try:
 
-- [ ] Multi-target tracking
-- [ ] Configurable serial port via environment variable
-- [ ] Proper logging framework (replace print statements)
-- [ ] Data persistence (recording tracking history)
-- [ ] Web dashboard for remote monitoring
-- [ ] Automated hyperparameter tuning
-- [ ] Support for alternative hardware (Jetson Nano, etc.)
+```python
+TRACKER_TYPE = "KCF"
+```
 
-## License
+### Servo movement is jerky
 
-[Specify your license here, e.g., MIT, Apache 2.0]
+Try these in `src/config.py`:
 
-## Contact & Support
+- Keep `USE_KALMAN = True`.
+- Reduce `KP_X` and `KP_Y`.
+- Increase `KD_X` and `KD_Y` slightly.
+- Increase the center deadband with `CENTER_BOX_W` and `CENTER_BOX_H`.
+- Lower `AUTO_MAX_SPEED`.
 
-For issues, questions, or contributions, please [open an issue / contact maintainer].
+### Auto tracking moves away from the target
 
----
+Flip the auto direction mapping:
 
-**Last Updated**: June 2026  
-**Python Version**: 3.8+  
-**Tested On**: Raspberry Pi 4B, Pi OS Bullseye 64-bit
+```python
+AUTO_BASE_POSITIVE_X_DIR = "ccw"
+AUTO_ARM_POSITIVE_Y_DIR = "ccw"
+```
+
+Change one axis at a time so you can verify the behavior.
+
+## Current Limitations
+
+- Single-target tracking only.
+- Reacquisition depends on the last trusted bounding box.
+- No persistent logging or data recording.
+- Tests require real hardware.
+- Serial port is configured in code.
+- The dependency file should be cleaned into a proper Raspberry Pi focused `requirements.txt`.
+
+## Good Next Improvements
+
+- Add a clean `requirements.txt`.
+- Add unit tests for geometry, detection smoothing, PD control, and command formatting.
+- Add environment variable overrides for serial port and UART enable/disable.
+- Add structured logging.
+- Add recording/debug output for tuning on captured videos.
+- Add a simple calibration mode for servo direction and speed limits.
+
