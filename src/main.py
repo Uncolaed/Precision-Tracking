@@ -77,6 +77,7 @@ def run():
             tracker_bbox = tracking["tracker_bbox"]
             tracker_label = tracking["tracker_label"]
             tracker_class_id = tracking["tracker_class_id"]
+            tracker_conf = tracking["tracker_conf"]
             trusted_bbox = tracking["trusted_bbox"]
             trusted_class_id = tracking["trusted_class_id"]
             misses = tracking["misses"]
@@ -113,6 +114,7 @@ def run():
                         if new_tracker is not None:
                             tracker, tracker_bbox = new_tracker, new_bbox
                             tracker_label, tracker_class_id = target["label"], target["class_id"]
+                            tracker_conf = target["conf"]
                             trusted_bbox, trusted_class_id = new_bbox, tracker_class_id
                             misses = 0
                             detector_misses = 0
@@ -152,12 +154,14 @@ def run():
                                 if new_tracker is not None:
                                     tracker, tracker_bbox = new_tracker, new_bbox
                                     tracker_label, tracker_class_id = best["label"], best["class_id"]
+                                    tracker_conf = best["conf"]
                                     misses = 0
                                     if kalman:
                                         kalman.reset()
                                     print(f"[snap] tracker to detector {tracker_label} bbox={tracker_bbox}")
                             else:
                                 tracker_label, tracker_class_id = best["label"], best["class_id"]
+                                tracker_conf = best["conf"]
 
                     if run_detect:
                         if detector_confirmed:
@@ -201,6 +205,7 @@ def run():
                         if new_tracker is not None:
                             tracker, tracker_bbox = new_tracker, new_bbox
                             tracker_label, tracker_class_id = target["label"], target["class_id"]
+                            tracker_conf = target["conf"]
                             trusted_bbox, trusted_class_id = new_bbox, tracker_class_id
                             misses = 0
                             detector_misses = 0
@@ -220,6 +225,7 @@ def run():
                             tracker_bbox = tracking["tracker_bbox"]
                             tracker_label = tracking["tracker_label"]
                             tracker_class_id = tracking["tracker_class_id"]
+                            tracker_conf = tracking["tracker_conf"]
                             trusted_bbox = tracking["trusted_bbox"]
                             trusted_class_id = tracking["trusted_class_id"]
                             misses = tracking["misses"]
@@ -250,6 +256,7 @@ def run():
                 state = LockState.IDLE
                 tracker = tracker_bbox = trusted_bbox = trusted_class_id = None
                 tracker_label = ""
+                tracker_conf = None
                 tracker_class_id = misses = detector_misses = lost_hold = 0
                 if time.time() > manual_active_until and not manual_sent_stop:
                     uart.stop_all()
@@ -260,13 +267,14 @@ def run():
             tracking["tracker_bbox"] = tracker_bbox
             tracking["tracker_label"] = tracker_label
             tracking["tracker_class_id"] = tracker_class_id
+            tracking["tracker_conf"] = tracker_conf
             tracking["trusted_bbox"] = trusted_bbox
             tracking["trusted_class_id"] = trusted_class_id
             tracking["misses"] = misses
             tracking["detector_misses"] = detector_misses
             tracking["lost_hold"] = lost_hold
 
-            draw(frame, mode, state, tracker_bbox, tracker_label, detections,
+            draw(frame, mode, state, tracker_bbox, tracker_label, tracker_conf, detections,
                  fx, fy, cmd_x, cmd_y, q, camera_fps, yolo_fps, manual_speed,
                  trusted_bbox=trusted_bbox, smooth_target=smooth_target)
 
