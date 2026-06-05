@@ -80,9 +80,11 @@ def run():
             trusted_bbox = tracking["trusted_bbox"]
             trusted_class_id = tracking["trusted_class_id"]
             misses = tracking["misses"]
+            detector_misses = tracking["detector_misses"]
             lost_hold = tracking["lost_hold"]
 
             detections = []
+            fresh_detections = []
             cmd_x = cmd_y = 0.0
             q = "NONE"
             smooth_target = None
@@ -95,11 +97,11 @@ def run():
 
                 if run_detect:
                     yolo_start = time.time()
-                    raw_dets = detect(model, frame)
+                    fresh_detections = detect(model, frame)
                     yolo_elapsed = time.time() - yolo_start
                     if yolo_elapsed > 0:
                         yolo_fps = 1.0 / yolo_elapsed
-                    detections = smoother.update(raw_dets)
+                    detections = smoother.update(fresh_detections)
                 else:
                     detections = smoother.update([])
 
@@ -113,6 +115,7 @@ def run():
                             tracker_label, tracker_class_id = target["label"], target["class_id"]
                             trusted_bbox, trusted_class_id = new_bbox, tracker_class_id
                             misses = 0
+                            detector_misses = 0
                             state = LockState.LOCKED
                             if kalman:
                                 kalman.reset()
@@ -126,12 +129,15 @@ def run():
                     else:
                         misses += 1
 
-                    if detections:
+                    detector_confirmed = False
+
+                    if fresh_detections:
                         ref_bbox = trusted_bbox if trusted_bbox is not None else tracker_bbox
                         ref_class_id = trusted_class_id if trusted_class_id is not None else tracker_class_id
-                        best = pick_best_detection_for_reference(detections, ref_bbox, ref_class_id)
+                        best = pick_best_detection_for_reference(fresh_detections, ref_bbox, ref_class_id)
 
                         if best is not None:
+                            detector_confirmed = True
                             best_bbox = tuple(map(int, best["bbox"]))
                             if tracker_bbox:
                                 agree_iou = iou_xywh(best_bbox, tracker_bbox)
@@ -153,11 +159,31 @@ def run():
                             else:
                                 tracker_label, tracker_class_id = best["label"], best["class_id"]
 
+                    if run_detect:
+                        if detector_confirmed:
+                            detector_misses = 0
+                        else:
+                            detector_misses += 1
+
                     if misses >= config.TRACKER_MAX_MISSES:
                         print("[LOCKED to LOST] tracker dropped, entering recovery hold")
                         tracker = tracker_bbox = None
                         lost_hold = config.LOST_HOLD_FRAMES
                         misses = 0
+                        detector_misses = 0
+                        state = LockState.LOST
+                        uart.stop_all(force=True)
+                        if kalman:
+                            kalman.reset()
+                        pd_x.reset()
+                        pd_y.reset()
+
+                    elif detector_misses >= config.DETECTOR_MAX_MISSES:
+                        print("[LOCKED to LOST] detector no longer confirms target")
+                        tracker = tracker_bbox = None
+                        lost_hold = config.LOST_HOLD_FRAMES
+                        misses = 0
+                        detector_misses = 0
                         state = LockState.LOST
                         uart.stop_all(force=True)
                         if kalman:
@@ -167,8 +193,8 @@ def run():
 
                 elif state == LockState.LOST:
                     target = None
-                    if trusted_bbox is not None and detections:
-                        target = pick_best_detection_for_reference(detections, trusted_bbox, trusted_class_id)
+                    if trusted_bbox is not None and fresh_detections:
+                        target = pick_best_detection_for_reference(fresh_detections, trusted_bbox, trusted_class_id)
 
                     if target is not None:
                         new_tracker, new_bbox = init_tracker_on_detection(frame, target)
@@ -177,6 +203,7 @@ def run():
                             tracker_label, tracker_class_id = target["label"], target["class_id"]
                             trusted_bbox, trusted_class_id = new_bbox, tracker_class_id
                             misses = 0
+                            detector_misses = 0
                             state = LockState.LOCKED
                             if kalman:
                                 kalman.reset()
@@ -196,6 +223,7 @@ def run():
                             trusted_bbox = tracking["trusted_bbox"]
                             trusted_class_id = tracking["trusted_class_id"]
                             misses = tracking["misses"]
+                            detector_misses = tracking["detector_misses"]
                             lost_hold = tracking["lost_hold"]
                             uart.stop_all(force=True)
 
@@ -222,7 +250,7 @@ def run():
                 state = LockState.IDLE
                 tracker = tracker_bbox = trusted_bbox = trusted_class_id = None
                 tracker_label = ""
-                tracker_class_id = misses = lost_hold = 0
+                tracker_class_id = misses = detector_misses = lost_hold = 0
                 if time.time() > manual_active_until and not manual_sent_stop:
                     uart.stop_all()
                     manual_sent_stop = True
@@ -235,6 +263,7 @@ def run():
             tracking["trusted_bbox"] = trusted_bbox
             tracking["trusted_class_id"] = trusted_class_id
             tracking["misses"] = misses
+            tracking["detector_misses"] = detector_misses
             tracking["lost_hold"] = lost_hold
 
             draw(frame, mode, state, tracker_bbox, tracker_label, detections,

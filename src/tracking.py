@@ -67,5 +67,6 @@ def reset_tracking_state(smoother, pd_x, pd_y, kalman):
         "trusted_bbox": None,
         "trusted_class_id": None,
         "misses": 0,
+        "detector_misses": 0,
         "lost_hold": 0,
     }
