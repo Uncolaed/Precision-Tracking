@@ -6,7 +6,12 @@ FRAME_H = 480
 CAMERA_FORMAT = "RGB888"
 CONVERT_RGB_TO_BGR = False
 
-MODEL_PATH = r"/home/mizo/Downloads/Galactic-dev/galactic_int8_openvino_model"
+from pathlib import Path
+import os
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+MODEL_PATH = str(PROJECT_ROOT / "models" / "galactic_int8_openvino_model")
 CONF = 0.45
 IMGSZ = 640
 
