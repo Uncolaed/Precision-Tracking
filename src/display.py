@@ -10,7 +10,7 @@ STATE_COLORS = {
 }
 
 
-def draw(frame, mode, state, tracker_bbox, target_label, all_dets,
+def draw(frame, mode, state, tracker_bbox, target_label, target_conf, all_dets,
          fx, fy, cmd_x, cmd_y, q, camera_fps, yolo_fps,
          manual_speed, trusted_bbox=None, smooth_target=None):
 
@@ -21,6 +21,8 @@ def draw(frame, mode, state, tracker_bbox, target_label, all_dets,
         for d in all_dets:
             x, y, bw, bh = d["bbox"]
             cv2.rectangle(frame, (x, y), (x + bw, y + bh), (120, 120, 120), 1)
+            cv2.putText(frame, f"{d['label']} {d['conf']:.2f}", (x, max(16, y - 6)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (160, 160, 160), 1)
 
     cv2.line(frame, (fx, 0), (fx, h), (70, 70, 70), 1)
     cv2.line(frame, (0, fy), (w, fy), (70, 70, 70), 1)
@@ -40,6 +42,11 @@ def draw(frame, mode, state, tracker_bbox, target_label, all_dets,
         x, y, bw, bh = tracker_bbox
         raw_cx, raw_cy = center_of_bbox(tracker_bbox)
         cv2.rectangle(frame, (x, y), (x + bw, y + bh), state_color, 2)
+        box_label = target_label
+        if target_conf is not None:
+            box_label = f"{target_label} {target_conf:.2f}"
+        cv2.putText(frame, box_label, (x, max(20, y - 8)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, state_color, 2)
         cv2.drawMarker(frame, (raw_cx, raw_cy), state_color, cv2.MARKER_CROSS, 16, 2)
 
         aim_cx, aim_cy = smooth_target if smooth_target else (raw_cx, raw_cy)
@@ -47,7 +54,7 @@ def draw(frame, mode, state, tracker_bbox, target_label, all_dets,
         if smooth_target:
             cv2.drawMarker(frame, (aim_cx, aim_cy), (255, 0, 255), cv2.MARKER_CROSS, 12, 1)
 
-        cv2.putText(frame, f"{target_label} | {q}", (10, 24),
+        cv2.putText(frame, f"{box_label} | {q}", (10, 24),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.65, state_color, 2)
         cv2.putText(frame, f"cmd=({cmd_x:+.3f}, {cmd_y:+.3f})", (10, 50),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.60, (255, 255, 255), 2)
