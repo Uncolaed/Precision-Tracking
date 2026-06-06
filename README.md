@@ -80,6 +80,7 @@ Precision-Tracking/
       metadata.yaml  Custom UAV detector metadata
   stm32_firmware/
     ai_servo.ino     STM32 servo controller firmware
+    mpulogic.ino     MPU6050 angle helper used by ai_servo.ino
   tests/
     run_tests.py     Manual hardware test launcher
     test_pi_camera.py
@@ -114,6 +115,21 @@ Servo pins in `stm32_firmware/ai_servo.ino`:
 #define BASE_SERVO_PIN PA0
 #define ARM_SERVO_PIN  PA1
 ```
+
+Optional MPU6050 arm-down limit:
+
+- `ai_servo.ino` reads MPU angles through `mpulogic.ino`.
+- The arm down command is currently treated as `arm ccw ...`, matching `ARM_DOWN_DIR = "ccw"` in `src/config.py`.
+- Tune these constants in `stm32_firmware/ai_servo.ino` after watching the USB Serial Monitor output:
+
+```cpp
+const MpuLimitAxis ARM_DOWN_LIMIT_AXIS = LIMIT_PITCH;
+const float ARM_DOWN_STOP_THRESHOLD_DEG = -35.0;
+const bool ARM_DOWN_STOP_WHEN_AXIS_IS_LESS_OR_EQUAL = true;
+const char ARM_DOWN_DIRECTION[] = "CCW";
+```
+
+Keep the turret still during firmware startup while the MPU calibrates. The printed MPU values are relative to the startup/resting angle.
 
 ## UART Protocol
 
