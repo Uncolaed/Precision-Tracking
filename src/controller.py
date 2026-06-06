@@ -117,15 +117,24 @@ def compute_errors(cx, cy, fx, fy):
     return ex, ey
 
 
-def command_from_pd(pd_value, positive_direction):
+def speed_from_center_distance(distance, deadband_half, frame_half, slow_zone_ratio):
+    slow_zone = max(deadband_half, frame_half * slow_zone_ratio)
+    if distance >= slow_zone:
+        return config.AUTO_MAX_SPEED
+
+    travel = max(slow_zone - deadband_half, 1.0)
+    progress = clamp((distance - deadband_half) / travel, 0.0, 1.0)
+    speed = config.AUTO_MIN_SPEED + progress * (config.AUTO_MAX_SPEED - config.AUTO_MIN_SPEED)
+    speed = round_speed(speed, config.SPEED_ROUND_STEP)
+    return int(clamp(speed, config.AUTO_MIN_SPEED, config.AUTO_MAX_SPEED))
+
+
+def command_from_pd(pd_value, positive_direction, distance, deadband_half, frame_half, slow_zone_ratio):
     pd_value = clamp(pd_value, -1.0, 1.0)
     if abs(pd_value) < 1e-3:
         return "stop", 0
     direction = positive_direction if pd_value > 0 else opposite_dir(positive_direction)
-    speed = int(abs(pd_value) * config.AUTO_MAX_SPEED)
-    speed = clamp(speed, config.AUTO_MIN_SPEED, config.AUTO_MAX_SPEED)
-    speed = round_speed(speed, config.SPEED_ROUND_STEP)
-    speed = clamp(speed, config.AUTO_MIN_SPEED, config.AUTO_MAX_SPEED)
+    speed = speed_from_center_distance(distance, deadband_half, frame_half, slow_zone_ratio)
     return direction, speed
 
 
@@ -141,14 +150,34 @@ def apply_auto_servo_control(uart, pd_x, pd_y, cx, cy, fx, fy):
         uart.stop_axis("base")
     else:
         cmd_x = clamp(pd_x.update(ex), -config.MAX_CMD_X, config.MAX_CMD_X)
-        uart.send_axis("base", *command_from_pd(cmd_x, config.AUTO_BASE_POSITIVE_X_DIR))
+        uart.send_axis(
+            "base",
+            *command_from_pd(
+                cmd_x,
+                config.AUTO_BASE_POSITIVE_X_DIR,
+                abs(cx - fx),
+                config.CENTER_BOX_W / 2.0,
+                config.FRAME_W / 2.0,
+                config.AUTO_SLOW_ZONE_X,
+            ),
+        )
 
     if y_dead:
         pd_y.reset()
         uart.stop_axis("arm")
     else:
         cmd_y = clamp(pd_y.update(ey), -config.MAX_CMD_Y, config.MAX_CMD_Y)
-        uart.send_axis("arm", *command_from_pd(cmd_y, config.AUTO_ARM_POSITIVE_Y_DIR))
+        uart.send_axis(
+            "arm",
+            *command_from_pd(
+                cmd_y,
+                config.AUTO_ARM_POSITIVE_Y_DIR,
+                abs(cy - fy),
+                config.CENTER_BOX_H / 2.0,
+                config.FRAME_H / 2.0,
+                config.AUTO_SLOW_ZONE_Y,
+            ),
+        )
 
     return cmd_x, cmd_y, ex, ey, x_dead and y_dead
 

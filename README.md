@@ -145,7 +145,7 @@ FRAME_W = 640
 FRAME_H = 480
 
 MODEL_PATH = str(PROJECT_ROOT / "models" / "galactic_int8_openvino_model")
-CONF = 0.45
+CONF = 0.65
 IMGSZ = 640
 
 TRACKER_TYPE = "CSRT"
@@ -160,6 +160,11 @@ KP_X = 0.50
 KD_X = 0.10
 KP_Y = 0.50
 KD_Y = 0.10
+
+AUTO_MAX_SPEED = 100
+AUTO_MIN_SPEED = 40
+AUTO_SLOW_ZONE_X = 0.35
+AUTO_SLOW_ZONE_Y = 0.35
 ```
 
 Direction tuning:
