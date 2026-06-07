@@ -12,6 +12,7 @@ class LockState(Enum):
 class ControlMode(Enum):
     AUTO = auto()
     MANUAL = auto()
+    CALIBRATION = auto()
 
 
 def make_tracker(kind="CSRT"):

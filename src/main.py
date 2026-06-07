@@ -16,15 +16,50 @@ from . import config
 from .camera import open_picamera, read_picamera_frame
 from .detection import DetectionSmoother, detect, pick_center_target, pick_best_detection_for_reference
 from .tracking import LockState, ControlMode, init_tracker_on_detection, reset_tracking_state
-from .controller import PD, ServoUart, apply_auto_servo_control, handle_manual_key
+from .controller import (
+    PD,
+    ServoUart,
+    apply_auto_servo_control,
+    configure_mpu_limits,
+    handle_manual_key,
+    set_mpu_max_from_current,
+    set_mpu_min_from_current,
+    show_mpu_sample,
+    zero_mpu_arm_x,
+)
 from .display import draw
 from .utils import center_of_bbox, quadrant, iou_xywh, dist2
+
+
+def mode_from_config():
+    start_mode = config.AUTO_START_MODE.upper()
+    if start_mode == "MANUAL":
+        return ControlMode.MANUAL
+    if start_mode == "CALIBRATION":
+        return ControlMode.CALIBRATION
+    return ControlMode.AUTO
+
+
+def next_mode(mode):
+    if mode == ControlMode.AUTO:
+        return ControlMode.MANUAL
+    if mode == ControlMode.MANUAL:
+        return ControlMode.CALIBRATION
+    return ControlMode.AUTO
+
+
+def print_calibration_help():
+    print("[calibration] WASD slow move, SPACE stop, +/- speed")
+    print("[calibration] z=zero Arm_X, n=current as min, x=current as max")
+    print("[calibration] b=MPU sample, v=reapply configured limits, m=next mode")
 
 
 def run():
     picam2 = open_picamera()
     model = YOLO(config.MODEL_PATH)
     uart = ServoUart(config.SERIAL_PORT, config.BAUD_RATE, enabled=config.ENABLE_UART)
+    if config.MPU_APPLY_LIMITS_ON_START:
+        configure_mpu_limits(uart)
     smoother = DetectionSmoother(ttl=config.SMOOTHER_TTL, match_dist=config.SMOOTHER_MATCH_DIST)
 
     if config.USE_KALMAN and KALMAN_AVAILABLE:
@@ -37,8 +72,9 @@ def run():
     pd_y = PD(config.KP_Y, config.KD_Y)
     tracking = reset_tracking_state(smoother, pd_x, pd_y, kalman)
 
-    mode = ControlMode.AUTO if config.AUTO_START_MODE.upper() == "AUTO" else ControlMode.MANUAL
+    mode = mode_from_config()
     manual_speed = config.MANUAL_SPEED_START
+    calibration_speed = config.MPU_CALIBRATION_SPEED_START
     manual_active_until = 0.0
     manual_sent_stop = True
 
@@ -48,9 +84,12 @@ def run():
     fps_counter = 0
     fps_timer = time.time()
 
-    print("[main] Pi Camera tracker with AUTO/MANUAL control started.")
-    print("[keys] m=switch mode, r=reset, q/ESC=quit")
+    print("[main] Pi Camera tracker with AUTO/MANUAL/CALIBRATION control started.")
+    print("[keys] m=cycle mode, r=reset, q/ESC=quit")
+    print("[mpu] c=zero Arm_X, v=reapply configured limits, b=MPU sample")
     print("[manual] WASD move, SPACE stop, +/- speed")
+    if mode == ControlMode.CALIBRATION:
+        print_calibration_help()
 
     try:
         while True:
@@ -251,7 +290,18 @@ def run():
                 else:
                     uart.stop_all()
 
-            else:  # MANUAL
+            elif mode == ControlMode.MANUAL:
+                detections = []
+                state = LockState.IDLE
+                tracker = tracker_bbox = trusted_bbox = trusted_class_id = None
+                tracker_label = ""
+                tracker_conf = None
+                tracker_class_id = misses = detector_misses = lost_hold = 0
+                if time.time() > manual_active_until and not manual_sent_stop:
+                    uart.stop_all()
+                    manual_sent_stop = True
+
+            else:  # CALIBRATION
                 detections = []
                 state = LockState.IDLE
                 tracker = tracker_bbox = trusted_bbox = trusted_class_id = None
@@ -276,7 +326,8 @@ def run():
 
             draw(frame, mode, state, tracker_bbox, tracker_label, tracker_conf, detections,
                  fx, fy, cmd_x, cmd_y, q, camera_fps, yolo_fps, manual_speed,
-                 trusted_bbox=trusted_bbox, smooth_target=smooth_target)
+                 trusted_bbox=trusted_bbox, smooth_target=smooth_target,
+                 calibration_speed=calibration_speed)
 
             cv2.imshow("Pi Camera Auto Manual Tracker", frame)
             key = cv2.waitKey(1) & 0xFF
@@ -289,8 +340,10 @@ def run():
                 tracking = reset_tracking_state(smoother, pd_x, pd_y, kalman)
                 manual_active_until = 0.0
                 manual_sent_stop = True
-                mode = ControlMode.MANUAL if mode == ControlMode.AUTO else ControlMode.AUTO
+                mode = next_mode(mode)
                 print(f"[mode] switched to {mode.name}")
+                if mode == ControlMode.CALIBRATION:
+                    print_calibration_help()
 
             elif key == ord("r"):
                 print("[manual] reset requested")
@@ -299,11 +352,60 @@ def run():
                 manual_active_until = 0.0
                 manual_sent_stop = True
 
+            elif key == ord("c"):
+                zero_mpu_arm_x(uart)
+
+            elif key == ord("v"):
+                configure_mpu_limits(uart)
+
+            elif key == ord("b"):
+                show_mpu_sample(uart)
+
             elif mode == ControlMode.MANUAL and key != 255:
                 moved, manual_speed = handle_manual_key(key, uart, manual_speed)
                 if moved:
                     manual_active_until = time.time() + config.MANUAL_HOLD_SECONDS
                     manual_sent_stop = False
+
+            elif mode == ControlMode.CALIBRATION and key != 255:
+                if key == ord("a"):
+                    uart.send_axis("base", config.BASE_LEFT_DIR, calibration_speed)
+                    manual_active_until = time.time() + config.MANUAL_HOLD_SECONDS
+                    manual_sent_stop = False
+                elif key == ord("d"):
+                    uart.send_axis("base", config.BASE_RIGHT_DIR, calibration_speed)
+                    manual_active_until = time.time() + config.MANUAL_HOLD_SECONDS
+                    manual_sent_stop = False
+                elif key == ord("w"):
+                    uart.send_axis("arm", config.ARM_UP_DIR, calibration_speed)
+                    manual_active_until = time.time() + config.MANUAL_HOLD_SECONDS
+                    manual_sent_stop = False
+                elif key == ord("s"):
+                    uart.send_axis("arm", config.ARM_DOWN_DIR, calibration_speed)
+                    manual_active_until = time.time() + config.MANUAL_HOLD_SECONDS
+                    manual_sent_stop = False
+                elif key == ord(" "):
+                    uart.stop_all(force=True)
+                    manual_active_until = 0.0
+                    manual_sent_stop = True
+                elif key == ord("z"):
+                    zero_mpu_arm_x(uart)
+                elif key == ord("n"):
+                    set_mpu_min_from_current(uart)
+                elif key == ord("x"):
+                    set_mpu_max_from_current(uart)
+                elif key in (ord("+"), ord("=")):
+                    calibration_speed = min(
+                        calibration_speed + config.MANUAL_SPEED_STEP,
+                        config.MPU_CALIBRATION_SPEED_MAX,
+                    )
+                    print(f"[calibration] speed increased to {calibration_speed}%")
+                elif key in (ord("-"), ord("_")):
+                    calibration_speed = max(
+                        calibration_speed - config.MANUAL_SPEED_STEP,
+                        config.MPU_CALIBRATION_SPEED_MIN,
+                    )
+                    print(f"[calibration] speed decreased to {calibration_speed}%")
 
     finally:
         uart.close()

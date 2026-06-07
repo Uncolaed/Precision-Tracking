@@ -1,3 +1,4 @@
+import re
 import time
 
 try:
@@ -8,6 +9,9 @@ except ImportError:
 
 from . import config
 from .utils import clamp, opposite_dir, round_speed
+
+
+ARM_X_RE = re.compile(r"\bArm_X:([-+]?\d+(?:\.\d+)?)")
 
 
 class PD:
@@ -46,7 +50,7 @@ class ServoUart:
             return
 
         try:
-            self._ser = serial.Serial(port, baud_rate, timeout=0)
+            self._ser = serial.Serial(port, baud_rate, timeout=0.05, write_timeout=1)
             time.sleep(2)
             print(f"[uart] opened {port} @ {baud_rate} baud")
         except serial.SerialException as e:
@@ -57,6 +61,27 @@ class ServoUart:
         if self._ser is None:
             return
         self._ser.write((line + "\n").encode())
+
+    def send_raw(self, command):
+        command = command.strip()
+        if not command:
+            return
+        self._write_line(command)
+        print(f"[uart] sent raw: {command}")
+
+    def read_lines(self, duration_seconds=0.5):
+        if self._ser is None:
+            return []
+
+        deadline = time.time() + max(duration_seconds, 0.0)
+        lines = []
+        while time.time() < deadline:
+            raw = self._ser.readline()
+            if raw:
+                lines.append(raw.decode(errors="replace").strip())
+            else:
+                time.sleep(0.01)
+        return [line for line in lines if line]
 
     def send_axis(self, axis, direction, speed):
         axis = axis.lower()
@@ -102,6 +127,73 @@ class ServoUart:
         if self._ser is not None:
             self._ser.close()
             print("[uart] closed")
+
+
+def _read_and_print_uart(uart, duration_seconds=None):
+    duration = config.MPU_CALIBRATION_READ_SECONDS if duration_seconds is None else duration_seconds
+    lines = uart.read_lines(duration)
+    if lines:
+        for line in lines:
+            print(f"[stm32] {line}")
+    else:
+        print("[stm32] no response")
+    return lines
+
+
+def _send_raw_and_print(uart, command, duration_seconds=None):
+    uart.send_raw(command)
+    return _read_and_print_uart(uart, duration_seconds)
+
+
+def _parse_arm_x(lines):
+    for line in reversed(lines):
+        match = ARM_X_RE.search(line)
+        if match:
+            return float(match.group(1))
+    return None
+
+
+def configure_mpu_limits(uart, offset=None, min_angle=None, max_angle=None):
+    offset = config.MPU_ARM_X_OFFSET if offset is None else offset
+    min_angle = config.MPU_ARM_X_MIN if min_angle is None else min_angle
+    max_angle = config.MPU_ARM_X_MAX if max_angle is None else max_angle
+
+    print(f"[mpu] applying limits offset={offset} range={min_angle}..{max_angle}")
+    lines = []
+    lines.extend(_send_raw_and_print(uart, f"limit offset {offset}"))
+    lines.extend(_send_raw_and_print(uart, f"limit range {min_angle} {max_angle}"))
+    lines.extend(show_mpu_sample(uart))
+    return lines
+
+
+def show_mpu_sample(uart):
+    return _send_raw_and_print(uart, "mpu show")
+
+
+def zero_mpu_arm_x(uart):
+    return _send_raw_and_print(uart, "limit zero")
+
+
+def set_mpu_min_from_current(uart):
+    lines = show_mpu_sample(uart)
+    arm_x = _parse_arm_x(lines)
+    if arm_x is None:
+        print("[mpu] could not parse Arm_X; min was not changed")
+        return lines
+    print(f"[mpu] setting current Arm_X as min: {arm_x:.1f}")
+    lines.extend(_send_raw_and_print(uart, f"limit min {arm_x:.1f}"))
+    return lines
+
+
+def set_mpu_max_from_current(uart):
+    lines = show_mpu_sample(uart)
+    arm_x = _parse_arm_x(lines)
+    if arm_x is None:
+        print("[mpu] could not parse Arm_X; max was not changed")
+        return lines
+    print(f"[mpu] setting current Arm_X as max: {arm_x:.1f}")
+    lines.extend(_send_raw_and_print(uart, f"limit max {arm_x:.1f}"))
+    return lines
 
 
 def axis_deadbands(cx, cy, fx, fy):

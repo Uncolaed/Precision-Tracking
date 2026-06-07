@@ -79,7 +79,9 @@ Precision-Tracking/
     galactic_int8_openvino_model/
       metadata.yaml  Custom UAV detector metadata
   stm32_firmware/
-    ai_servo.ino     STM32 servo controller firmware
+    ai_servo/
+      ai_servo.ino   STM32 servo controller firmware
+      mpulogic.ino   MPU6050 angle helper used by ai_servo.ino
   tests/
     run_tests.py     Manual hardware test launcher
     test_pi_camera.py
@@ -108,11 +110,50 @@ Raspberry Pi RX  -> STM32 PA9 TX
 Raspberry Pi GND -> STM32 GND
 ```
 
-Servo pins in `stm32_firmware/ai_servo.ino`:
+Servo pins in `stm32_firmware/ai_servo/ai_servo.ino`:
 
 ```cpp
 #define BASE_SERVO_PIN PA0
 #define ARM_SERVO_PIN  PA1
+```
+
+Optional MPU6050 arm X-axis limits:
+
+- `ai_servo.ino` reads MPU angles through `mpulogic.ino`.
+- The firmware limits arm movement using `Arm_X`, an absolute gravity-based roll angle.
+- Startup still calibrates gyro drift, but it does not zero the safety angle.
+- Tune these constants in `stm32_firmware/ai_servo/ai_servo.ino` after watching the USB Serial Monitor output:
+
+```cpp
+#define DEFAULT_ARM_X_ZERO_OFFSET_DEG 1.5
+const float DEFAULT_ARM_X_MIN_LIMIT_DEG = -90.0;
+const float DEFAULT_ARM_X_MAX_LIMIT_DEG = 90.0;
+const char ARM_NEGATIVE_X_DIRECTION[] = "CCW";
+const char ARM_POSITIVE_X_DIRECTION[] = "CW";
+```
+
+Keep the turret still during firmware startup while the MPU calibrates. Watch `RawRoll_X`, `RelRoll_X`, and `Arm_X` in the Serial Monitor. Set the offset so the normal chip-facing-ceiling position makes `Arm_X` read near `0`.
+
+The MPU arm limit can also be tuned at runtime from USB Serial Monitor or Raspberry Pi UART:
+
+```text
+limit show
+limit offset 1.5
+limit zero
+limit min -90
+limit max 90
+limit range -90 90
+```
+
+`limit zero` sets the current `RawRoll_X` as the zero offset for this run.
+
+The main app can apply configured MPU limits on startup from `src/config.py`:
+
+```python
+MPU_APPLY_LIMITS_ON_START = True
+MPU_ARM_X_OFFSET = 1.5
+MPU_ARM_X_MIN = -90.0
+MPU_ARM_X_MAX = 90.0
 ```
 
 ## UART Protocol
@@ -207,9 +248,12 @@ python -m src.main
 Keyboard controls:
 
 ```text
-m       switch AUTO/MANUAL mode
+m       cycle AUTO/MANUAL/CALIBRATION mode
 r       reset tracking state
 q/ESC   quit
+c       zero current MPU Arm_X position
+v       reapply configured MPU limits
+b       print one MPU sample
 
 Manual mode:
 w       arm up
@@ -218,7 +262,27 @@ s       arm down
 d       base right
 SPACE   stop all
 +/-     adjust manual speed
+
+Calibration mode:
+w/s     arm up/down at low calibration speed
+a/d     base left/right at low calibration speed
+SPACE   stop all
+z       zero current MPU Arm_X position
+n       set current Arm_X as min limit
+x       set current Arm_X as max limit
+b       print one MPU sample
+v       reapply configured MPU limits
++/-     adjust calibration speed
 ```
+
+MPU calibration workflow:
+
+1. Enter `CALIBRATION` mode with `m`.
+2. Move the arm to the neutral position and press `z`.
+3. Move to the lower physical limit and press `n`.
+4. Move to the upper physical limit and press `x`.
+5. Press `b` to inspect the current MPU values.
+6. Press `m` back to `AUTO`.
 
 ## Manual Hardware Tests
 
@@ -231,10 +295,13 @@ python tests/run_tests.py
 Available tests:
 
 - UART manual command sender.
+- MPU calibration and arm limit command sender.
 - Pi Camera preview and FPS check.
 - YOLO camera detection demo.
 
 These are hardware smoke tests, not automated unit tests.
+
+For MPU calibration, upload `stm32_firmware/ai_servo/ai_servo.ino` first, then run `test_mpu_calibration.py` from the launcher. The test can send `limit zero`, `limit range -90 90`, and `mpu show` over Raspberry Pi UART.
 
 ## Model
 
