@@ -38,7 +38,6 @@ const int PWM_MAX_OFFSET = 500;
 bool reverseBaseS  ervo = false;
 bool reverseArmServo = true;
 
-// Arm safety limits from MPU6050 Roll_X angle.
 // Change these after checking the live MPU debug output.
 const bool ENABLE_ARM_X_MPU_LIMIT = true;
 #define DEFAULT_ARM_X_ZERO_OFFSET_DEG 1.5
