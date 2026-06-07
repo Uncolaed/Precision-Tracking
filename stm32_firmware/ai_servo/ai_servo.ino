@@ -34,7 +34,7 @@ const int PWM_MAX_OFFSET = 500;
 
 // If one servo moves opposite to what I expect, I only change this value.
 bool reverseBaseServo = false;
-bool reverseArmServo = false;
+bool reverseArmServo = true;
 
 // Arm safety limits from MPU6050 Roll_X angle.
 // Change these after checking the live MPU debug output.
