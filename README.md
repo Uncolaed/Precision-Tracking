@@ -263,10 +263,13 @@ python tests/run_tests.py
 Available tests:
 
 - UART manual command sender.
+- MPU calibration and arm limit command sender.
 - Pi Camera preview and FPS check.
 - YOLO camera detection demo.
 
 These are hardware smoke tests, not automated unit tests.
+
+For MPU calibration, upload `stm32_firmware/ai_servo/ai_servo.ino` first, then run `test_mpu_calibration.py` from the launcher. The test can send `limit zero`, `limit range -90 90`, and `mpu show` over Raspberry Pi UART.
 
 ## Model
 

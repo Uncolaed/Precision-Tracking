@@ -58,6 +58,27 @@ class ServoUart:
             return
         self._ser.write((line + "\n").encode())
 
+    def send_raw(self, command):
+        command = command.strip()
+        if not command:
+            return
+        self._write_line(command)
+        print(f"[uart] sent raw: {command}")
+
+    def read_lines(self, duration_seconds=0.5):
+        if self._ser is None:
+            return []
+
+        deadline = time.time() + max(duration_seconds, 0.0)
+        lines = []
+        while time.time() < deadline:
+            raw = self._ser.readline()
+            if raw:
+                lines.append(raw.decode(errors="replace").strip())
+            else:
+                time.sleep(0.01)
+        return [line for line in lines if line]
+
     def send_axis(self, axis, direction, speed):
         axis = axis.lower()
         direction = direction.lower()
