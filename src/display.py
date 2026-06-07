@@ -12,7 +12,7 @@ STATE_COLORS = {
 
 def draw(frame, mode, state, tracker_bbox, target_label, target_conf, all_dets,
          fx, fy, cmd_x, cmd_y, q, camera_fps, yolo_fps,
-         manual_speed, trusted_bbox=None, smooth_target=None):
+         manual_speed, trusted_bbox=None, smooth_target=None, calibration_speed=None):
 
     h, w = frame.shape[:2]
     state_color = STATE_COLORS[state]
@@ -62,10 +62,17 @@ def draw(frame, mode, state, tracker_bbox, target_label, target_conf, all_dets,
         cv2.putText(frame, f"State: {state.name}", (10, 24),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.65, state_color, 2)
 
-    cv2.putText(frame, f"Mode: {mode.name} | m switch | r reset | q quit", (10, h - 92),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.52, (255, 255, 255), 2)
-    cv2.putText(frame, f"Manual: WASD move | Space stop | +/- speed {manual_speed}%", (10, h - 68),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.52, (255, 255, 255), 2)
+    if mode.name == "CALIBRATION":
+        speed = calibration_speed if calibration_speed is not None else manual_speed
+        cv2.putText(frame, "CAL: WASD slow move | z zero | n min | x max | b sample", (10, h - 92),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.52, (255, 255, 255), 2)
+        cv2.putText(frame, f"CAL: +/- speed {speed}% | v limits | m mode | r reset | q quit", (10, h - 68),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.52, (255, 255, 255), 2)
+    else:
+        cv2.putText(frame, f"Mode: {mode.name} | m mode | c zero | v limits | b MPU", (10, h - 92),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.52, (255, 255, 255), 2)
+        cv2.putText(frame, f"Manual: WASD move | Space stop | +/- speed {manual_speed}%", (10, h - 68),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.52, (255, 255, 255), 2)
     cv2.putText(frame, f"Cam FPS: {camera_fps:.1f} | YOLO FPS: {yolo_fps:.1f}", (10, h - 44),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.52, (255, 255, 255), 2)
     cv2.putText(frame, f"{mode.name}/{state.name}", (w - 170, h - 12),
