@@ -13,6 +13,7 @@ This project uses a Raspberry Pi camera, a custom YOLO OpenVINO model, OpenCV tr
 - Smooths target position with an optional Kalman filter.
 - Converts target offset into base and arm servo commands.
 - Supports AUTO tracking and MANUAL keyboard control.
+- Turns the laser pointer on when the tracked target is centered.
 - Sends simple text commands to STM32 over UART.
 
 ## System Overview
@@ -115,6 +116,16 @@ Servo pins in `stm32_firmware/ai_servo/ai_servo.ino`:
 ```cpp
 #define BASE_SERVO_PIN PA0
 #define ARM_SERVO_PIN  PA1
+#define LASER_PIN      PA8
+```
+
+Laser UART commands:
+
+```text
+laser on
+laser off
+laser toggle
+laser show
 ```
 
 Optional MPU6050 arm X-axis limits:
@@ -170,6 +181,10 @@ arm cw 25
 arm ccw 25
 arm stop
 all stop
+laser on
+laser off
+laser toggle
+laser show
 ```
 
 The STM32 firmware accepts the same commands from both USB serial and Raspberry Pi UART, which makes it easy to test manually before running the full tracker.
@@ -262,6 +277,10 @@ s       arm down
 d       base right
 SPACE   stop all
 +/-     adjust manual speed
+l       toggle laser
+
+Auto mode:
+laser   turns on only while the locked target is inside the center box
 
 Calibration mode:
 w/s     arm up/down at low calibration speed
@@ -296,6 +315,7 @@ Available tests:
 
 - UART manual command sender.
 - MPU calibration and arm limit command sender.
+- Laser UART command sender.
 - Pi Camera preview and FPS check.
 - YOLO camera detection demo.
 

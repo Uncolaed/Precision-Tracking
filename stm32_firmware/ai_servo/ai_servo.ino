@@ -15,6 +15,7 @@ float getMpuYawDeg();
 // I am using PA0 for the base servo and PA1 for the arm servo.
 #define BASE_SERVO_PIN PA0
 #define ARM_SERVO_PIN  PA1
+#define LASER_PIN      PA8
 #define STM_LED_BUILTIN PC13
 
 // I am using UART between Raspberry Pi and STM32.
@@ -24,6 +25,7 @@ HardwareSerial PiSerial(PA10, PA9); // RX, TX
 
 Servo baseServo;
 Servo armServo;
+bool laserIsOn = false;
 
 // I use 1500 microseconds as stop because these are continuous rotation servos.
 const int PWM_STOP = 1500;
@@ -33,10 +35,9 @@ const int PWM_STOP = 1500;
 const int PWM_MAX_OFFSET = 500;
 
 // If one servo moves opposite to what I expect, I only change this value.
-bool reverseBaseServo = false;
+bool reverseBaseS  ervo = false;
 bool reverseArmServo = true;
 
-// Arm safety limits from MPU6050 Roll_X angle.
 // Change these after checking the live MPU debug output.
 const bool ENABLE_ARM_X_MPU_LIMIT = true;
 #define DEFAULT_ARM_X_ZERO_OFFSET_DEG 1.5
@@ -66,9 +67,13 @@ bool isArmDirectionBlockedByXLimit(String direction);
 void enforceArmXLimit();
 void stopArmBecauseXLimitReached();
 void printMpuDebug();
+bool handleLaserCommand(String input);
 bool handleLimitCommand(String input);
 bool handleMpuCommand(String input);
 bool isFloatText(String text);
+void setLaser(bool enabled);
+void toggleLaser();
+void printLaserStatus();
 void printLimitSettings();
 void printMpuSample();
 void respondLine(String message);
@@ -77,9 +82,11 @@ void setup() {
   Serial.begin(9600);      // USB Serial Monitor for debugging.
   PiSerial.begin(9600);    // UART from Raspberry Pi.
 
+  pinMode(STM_LED_BUILTIN, OUTPUT);
+  pinMode(LASER_PIN, OUTPUT);
+  setLaser(false);
 
   delay(1000);
-  pinMode(STM_LED_BUILTIN, OUTPUT);
 
   if (ENABLE_ARM_X_MPU_LIMIT) {
     Serial.println("Calibrating MPU6050 - keep the turret still...");
@@ -105,6 +112,10 @@ void setup() {
   Serial.println("arm cw 50");
   Serial.println("arm ccw 50");
   Serial.println("arm stop");
+  Serial.println("laser on");
+  Serial.println("laser off");
+  Serial.println("laser toggle");
+  Serial.println("laser show");
   Serial.println("all stop");
   Serial.println("limit show");
   Serial.println("limit offset 1.5");
@@ -331,6 +342,10 @@ void parseCommand(String input) {
     return;
   }
 
+  if (handleLaserCommand(input)) {
+    return;
+  }
+
   if (handleLimitCommand(input)) {
     return;
   }
@@ -411,6 +426,38 @@ void parseCommand(String input) {
   else {
     Serial.println("Invalid servo name. Use BASE or ARM.");
   }
+}
+
+bool handleLaserCommand(String input) {
+  if (input == "LASER ON" || input == "LASER 1") {
+    setLaser(true);
+    printLaserStatus();
+    return true;
+  }
+
+  if (input == "LASER OFF" || input == "LASER 0") {
+    setLaser(false);
+    printLaserStatus();
+    return true;
+  }
+
+  if (input == "LASER TOGGLE") {
+    toggleLaser();
+    printLaserStatus();
+    return true;
+  }
+
+  if (input == "LASER SHOW" || input == "LASER STATUS") {
+    printLaserStatus();
+    return true;
+  }
+
+  if (input.startsWith("LASER ")) {
+    respondLine("Invalid laser command. Use: laser on, laser off, laser toggle, or laser show");
+    return true;
+  }
+
+  return false;
 }
 
 bool handleLimitCommand(String input) {
@@ -547,6 +594,21 @@ bool isFloatText(String text) {
     }
   }
   return seenDigit;
+}
+
+void setLaser(bool enabled) {
+  laserIsOn = enabled;
+  digitalWrite(LASER_PIN, laserIsOn ? HIGH : LOW);
+}
+
+void toggleLaser() {
+  setLaser(!laserIsOn);
+}
+
+void printLaserStatus() {
+  String message = "Laser ";
+  message += laserIsOn ? "ON" : "OFF";
+  respondLine(message);
 }
 
 void printLimitSettings() {

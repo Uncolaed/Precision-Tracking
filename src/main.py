@@ -87,7 +87,8 @@ def run():
     print("[main] Pi Camera tracker with AUTO/MANUAL/CALIBRATION control started.")
     print("[keys] m=cycle mode, r=reset, q/ESC=quit")
     print("[mpu] c=zero Arm_X, v=reapply configured limits, b=MPU sample")
-    print("[manual] WASD move, SPACE stop, +/- speed")
+    print("[laser] AUTO turns laser on when centered; MANUAL l=toggle laser")
+    print("[manual] WASD move, SPACE stop, +/- speed, l=laser")
     if mode == ControlMode.CALIBRATION:
         print_calibration_help()
 
@@ -282,6 +283,8 @@ def run():
                         cx, cy = raw_cx, raw_cy
 
                     cmd_x, cmd_y, ex, ey, centered = apply_auto_servo_control(uart, pd_x, pd_y, cx, cy, fx, fy)
+                    if config.AUTO_LASER_ON_WHEN_CENTERED:
+                        uart.set_laser(centered)
                     q = quadrant(cx, cy, fx, fy, config.CENTER_BOX_W, config.CENTER_BOX_H)
 
                     if frame_idx % config.PRINT_EVERY_N == 0:
@@ -289,6 +292,7 @@ def run():
                               f"err_x={ex:+.3f} err_y={ey:+.3f} quadrant={q} centered={centered}")
                 else:
                     uart.stop_all()
+                    uart.set_laser(False)
 
             elif mode == ControlMode.MANUAL:
                 detections = []
@@ -337,6 +341,7 @@ def run():
 
             if key == ord("m"):
                 uart.stop_all(force=True)
+                uart.set_laser(False, force=True)
                 tracking = reset_tracking_state(smoother, pd_x, pd_y, kalman)
                 manual_active_until = 0.0
                 manual_sent_stop = True
@@ -348,6 +353,7 @@ def run():
             elif key == ord("r"):
                 print("[manual] reset requested")
                 uart.stop_all(force=True)
+                uart.set_laser(False, force=True)
                 tracking = reset_tracking_state(smoother, pd_x, pd_y, kalman)
                 manual_active_until = 0.0
                 manual_sent_stop = True
@@ -360,6 +366,9 @@ def run():
 
             elif key == ord("b"):
                 show_mpu_sample(uart)
+
+            elif mode == ControlMode.MANUAL and key == ord("l"):
+                uart.toggle_laser()
 
             elif mode == ControlMode.MANUAL and key != 255:
                 moved, manual_speed = handle_manual_key(key, uart, manual_speed)

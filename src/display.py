@@ -71,7 +71,7 @@ def draw(frame, mode, state, tracker_bbox, target_label, target_conf, all_dets,
     else:
         cv2.putText(frame, f"Mode: {mode.name} | m mode | c zero | v limits | b MPU", (10, h - 92),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.52, (255, 255, 255), 2)
-        cv2.putText(frame, f"Manual: WASD move | Space stop | +/- speed {manual_speed}%", (10, h - 68),
+        cv2.putText(frame, f"Manual: WASD move | Space stop | +/- speed {manual_speed}% | l laser", (10, h - 68),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.52, (255, 255, 255), 2)
     cv2.putText(frame, f"Cam FPS: {camera_fps:.1f} | YOLO FPS: {yolo_fps:.1f}", (10, h - 44),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.52, (255, 255, 255), 2)

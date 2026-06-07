@@ -38,8 +38,9 @@ class ServoUart:
     def __init__(self, port, baud_rate, enabled=True):
         self._ser = None
         self._enabled = enabled
-        self._last_command = {"base": None, "arm": None, "all": None}
-        self._last_send_time = {"base": 0.0, "arm": 0.0, "all": 0.0}
+        self._last_command = {"base": None, "arm": None, "all": None, "laser": None}
+        self._last_send_time = {"base": 0.0, "arm": 0.0, "all": 0.0, "laser": 0.0}
+        self._laser_enabled = False
 
         if not self._enabled:
             print("[uart] disabled from config")
@@ -112,6 +113,27 @@ class ServoUart:
         self._last_command["base"] = "base stop"
         self._last_command["arm"] = "arm stop"
 
+    def set_laser(self, enabled, force=False):
+        enabled = bool(enabled)
+        command = "laser on" if enabled else "laser off"
+        if force:
+            self._write_line(command)
+            print(f"[uart] sent: {command}")
+            self._last_command["laser"] = command
+            self._last_send_time["laser"] = time.time()
+        else:
+            self._send_if_needed("laser", command)
+        self._laser_enabled = enabled
+
+    def toggle_laser(self):
+        self.set_laser(not self._laser_enabled, force=True)
+        print(f"[laser] {'on' if self._laser_enabled else 'off'}")
+        return self._laser_enabled
+
+    def show_laser(self):
+        self.send_raw("laser show")
+        return _read_and_print_uart(self, config.MPU_CALIBRATION_READ_SECONDS)
+
     def _send_if_needed(self, channel, command):
         now = time.time()
         stale = now - self._last_send_time.get(channel, 0.0) >= config.UART_REFRESH_SECONDS
@@ -123,6 +145,7 @@ class ServoUart:
         self._last_send_time[channel] = now
 
     def close(self):
+        self.set_laser(False, force=True)
         self.stop_all(force=True)
         if self._ser is not None:
             self._ser.close()

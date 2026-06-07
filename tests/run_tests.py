@@ -8,6 +8,7 @@ TESTS = {
     "2": ("Camera test", "test_pi_camera.py"),
     "3": ("Model loading test", "test_yolo.py"),
     "4": ("MPU calibration and limit test", "test_mpu_calibration.py"),
+    "5": ("Laser UART control test", "test_laser_uart.py"),
 }
 
 
