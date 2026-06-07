@@ -3,6 +3,11 @@
 bool setupMpu6050();
 void updateMpu6050();
 bool isMpuReady();
+float getMpuRawRollDeg();
+float getMpuArmXDeg();
+float getMpuArmXZeroOffsetDeg();
+void setMpuArmXZeroOffsetDeg(float offsetDeg);
+bool zeroMpuArmXAtCurrentRoll();
 float getMpuRollDeg();
 float getMpuPitchDeg();
 float getMpuYawDeg();
@@ -10,6 +15,7 @@ float getMpuYawDeg();
 // I am using PA0 for the base servo and PA1 for the arm servo.
 #define BASE_SERVO_PIN PA0
 #define ARM_SERVO_PIN  PA1
+#define STM_LED_BUILTIN PC13
 
 // I am using UART between Raspberry Pi and STM32.
 // STM32 PA10 = RX, receives from Raspberry Pi TX.
@@ -30,45 +36,52 @@ const int PWM_MAX_OFFSET = 500;
 bool reverseBaseServo = false;
 bool reverseArmServo = false;
 
-enum MpuLimitAxis {
-  LIMIT_ROLL,
-  LIMIT_PITCH,
-  LIMIT_YAW
-};
+// Arm safety limits from MPU6050 Roll_X angle.
+// Change these after checking the live MPU debug output.
+const bool ENABLE_ARM_X_MPU_LIMIT = true;
+#define DEFAULT_ARM_X_ZERO_OFFSET_DEG 1.5
+const float DEFAULT_ARM_X_MIN_LIMIT_DEG = -90.0;
+const float DEFAULT_ARM_X_MAX_LIMIT_DEG = 90.0;
+float armXMinLimitDeg = DEFAULT_ARM_X_MIN_LIMIT_DEG;
+float armXMaxLimitDeg = DEFAULT_ARM_X_MAX_LIMIT_DEG;
 
-// Arm-down safety limit from the MPU6050 angle.
-// Change these values after checking the live MPU debug output.
-const bool ENABLE_ARM_DOWN_MPU_LIMIT = true;
-const MpuLimitAxis ARM_DOWN_LIMIT_AXIS = LIMIT_PITCH;
-const float ARM_DOWN_STOP_THRESHOLD_DEG = -35.0;
-const bool ARM_DOWN_STOP_WHEN_AXIS_IS_LESS_OR_EQUAL = true;
-const char ARM_DOWN_DIRECTION[] = "CCW";
+// Tune these if your servo direction is opposite to the Roll_X movement.
+const char ARM_NEGATIVE_X_DIRECTION[] = "CCW";
+const char ARM_POSITIVE_X_DIRECTION[] = "CW";
 
-// If this is true, the arm cannot move down unless the MPU is working.
-const bool BLOCK_ARM_DOWN_WHEN_MPU_NOT_READY = true;
+// If this is true, the arm cannot move unless the MPU is working.
+const bool BLOCK_ARM_WHEN_MPU_NOT_READY = true;
 
 const bool PRINT_MPU_DEBUG = true;
 const unsigned long MPU_DEBUG_INTERVAL_MS = 500;
 
 String currentArmDirection = "STOP";
-bool armDownLimitWasReported = false;
+bool armMpuLimitWasReported = false;
 unsigned long lastMpuDebugTime = 0;
 
 void controlArmServo(String direction, int speedPercent);
-bool isArmDownCommand(String direction);
-float getArmLimitAngle();
-bool isArmDownLimitReached();
-void enforceArmDownLimit();
-void stopArmBecauseLimitReached();
+bool isDirectionTowardNegativeX(String direction);
+bool isDirectionTowardPositiveX(String direction);
+bool isArmDirectionBlockedByXLimit(String direction);
+void enforceArmXLimit();
+void stopArmBecauseXLimitReached();
 void printMpuDebug();
+bool handleLimitCommand(String input);
+bool handleMpuCommand(String input);
+bool isFloatText(String text);
+void printLimitSettings();
+void printMpuSample();
+void respondLine(String message);
 
 void setup() {
   Serial.begin(9600);      // USB Serial Monitor for debugging.
   PiSerial.begin(9600);    // UART from Raspberry Pi.
 
-  delay(1000);
 
-  if (ENABLE_ARM_DOWN_MPU_LIMIT) {
+  delay(1000);
+  pinMode(STM_LED_BUILTIN, OUTPUT);
+
+  if (ENABLE_ARM_X_MPU_LIMIT) {
     Serial.println("Calibrating MPU6050 - keep the turret still...");
     if (setupMpu6050()) {
       Serial.println("MPU6050 ready.");
@@ -93,11 +106,18 @@ void setup() {
   Serial.println("arm ccw 50");
   Serial.println("arm stop");
   Serial.println("all stop");
+  Serial.println("limit show");
+  Serial.println("limit offset 1.5");
+  Serial.println("limit zero");
+  Serial.println("limit range -90 90");
+  Serial.println("mpu show");
 }
 
-void loop() {
+void loop() 
+{
+  digitalWrite(STM_LED_BUILTIN, !digitalRead(STM_LED_BUILTIN));
   updateMpu6050();
-  enforceArmDownLimit();
+  enforceArmXLimit();
   printMpuDebug();
   handleManualSerial();
   handlePiUART();
@@ -171,80 +191,78 @@ void stopAllServos() {
 }
 
 void controlArmServo(String direction, int speedPercent) {
-  if (isArmDownCommand(direction) && isArmDownLimitReached()) {
-    stopArmBecauseLimitReached();
+  if (isArmDirectionBlockedByXLimit(direction)) {
+    stopArmBecauseXLimitReached();
     return;
   }
 
   if (controlServo(armServo, "Arm", direction, speedPercent, reverseArmServo)) {
     currentArmDirection = direction;
-    if (!isArmDownLimitReached()) {
-      armDownLimitWasReported = false;
+    if (!isArmDirectionBlockedByXLimit(direction)) {
+      armMpuLimitWasReported = false;
     }
   }
 }
 
-bool isArmDownCommand(String direction) {
-  return direction == ARM_DOWN_DIRECTION;
+bool isDirectionTowardNegativeX(String direction) {
+  return direction == ARM_NEGATIVE_X_DIRECTION;
 }
 
-float getArmLimitAngle() {
-  if (ARM_DOWN_LIMIT_AXIS == LIMIT_ROLL) {
-    return getMpuRollDeg();
-  }
-  if (ARM_DOWN_LIMIT_AXIS == LIMIT_YAW) {
-    return getMpuYawDeg();
-  }
-  return getMpuPitchDeg();
+bool isDirectionTowardPositiveX(String direction) {
+  return direction == ARM_POSITIVE_X_DIRECTION;
 }
 
-bool isArmDownLimitReached() {
-  if (!ENABLE_ARM_DOWN_MPU_LIMIT) {
+bool isArmDirectionBlockedByXLimit(String direction) {
+  if (!ENABLE_ARM_X_MPU_LIMIT || direction == "STOP") {
     return false;
   }
 
   if (!isMpuReady()) {
-    return BLOCK_ARM_DOWN_WHEN_MPU_NOT_READY;
+    return BLOCK_ARM_WHEN_MPU_NOT_READY;
   }
 
-  float angle = getArmLimitAngle();
-  if (ARM_DOWN_STOP_WHEN_AXIS_IS_LESS_OR_EQUAL) {
-    return angle <= ARM_DOWN_STOP_THRESHOLD_DEG;
+  float armX = getMpuArmXDeg();
+  if (isDirectionTowardNegativeX(direction) && armX <= armXMinLimitDeg) {
+    return true;
   }
-  return angle >= ARM_DOWN_STOP_THRESHOLD_DEG;
+  if (isDirectionTowardPositiveX(direction) && armX >= armXMaxLimitDeg) {
+    return true;
+  }
+  return false;
 }
 
-void enforceArmDownLimit() {
-  if (!isArmDownCommand(currentArmDirection)) {
-    if (!isArmDownLimitReached()) {
-      armDownLimitWasReported = false;
-    }
+void enforceArmXLimit() {
+  if (currentArmDirection == "STOP") {
     return;
   }
 
-  if (isArmDownLimitReached()) {
-    stopArmBecauseLimitReached();
+  if (isArmDirectionBlockedByXLimit(currentArmDirection)) {
+    stopArmBecauseXLimitReached();
   }
 }
 
-void stopArmBecauseLimitReached() {
+void stopArmBecauseXLimitReached() {
   controlServo(armServo, "Arm", "STOP", 0, reverseArmServo);
   currentArmDirection = "STOP";
 
-  if (!armDownLimitWasReported) {
-    Serial.print("Arm down stopped by MPU limit. Angle: ");
+  if (!armMpuLimitWasReported) {
+    Serial.print("Arm stopped by MPU Arm_X limit. Arm_X: ");
     if (isMpuReady()) {
-      Serial.println(getArmLimitAngle(), 1);
+      Serial.print(getMpuArmXDeg(), 1);
+      Serial.print(" Range:");
+      Serial.print(armXMinLimitDeg, 1);
+      Serial.print(" to ");
+      Serial.println(armXMaxLimitDeg, 1);
     }
     else {
       Serial.println("MPU not ready");
     }
-    armDownLimitWasReported = true;
+    armMpuLimitWasReported = true;
   }
 }
 
 void printMpuDebug() {
-  if (!PRINT_MPU_DEBUG || !ENABLE_ARM_DOWN_MPU_LIMIT) {
+  if (!PRINT_MPU_DEBUG || !ENABLE_ARM_X_MPU_LIMIT) {
     return;
   }
 
@@ -259,14 +277,22 @@ void printMpuDebug() {
     return;
   }
 
-  Serial.print("MPU Roll_X:");
+  Serial.print("MPU RawRoll_X:");
+  Serial.print(getMpuRawRollDeg(), 1);
+  Serial.print(" RelRoll_X:");
   Serial.print(getMpuRollDeg(), 1);
+  Serial.print(" Arm_X:");
+  Serial.print(getMpuArmXDeg(), 1);
   Serial.print(" Pitch_Y:");
   Serial.print(getMpuPitchDeg(), 1);
   Serial.print(" Yaw_Z:");
   Serial.print(getMpuYawDeg(), 1);
-  Serial.print(" LimitAxis:");
-  Serial.println(getArmLimitAngle(), 1);
+  Serial.print(" XRange:");
+  Serial.print(armXMinLimitDeg, 1);
+  Serial.print("..");
+  Serial.print(armXMaxLimitDeg, 1);
+  Serial.print(" XOffset:");
+  Serial.println(getMpuArmXZeroOffsetDeg(), 1);
 }
 
 // I keep USB Serial Monitor working so I can test without the Pi if needed.
@@ -296,6 +322,14 @@ void parseCommand(String input) {
 
   if (input == "ALL STOP" || input == "STOP") {
     stopAllServos();
+    return;
+  }
+
+  if (handleLimitCommand(input)) {
+    return;
+  }
+
+  if (handleMpuCommand(input)) {
     return;
   }
 
@@ -371,4 +405,189 @@ void parseCommand(String input) {
   else {
     Serial.println("Invalid servo name. Use BASE or ARM.");
   }
+}
+
+bool handleLimitCommand(String input) {
+  if (!input.startsWith("LIMIT ")) {
+    return false;
+  }
+
+  String command = input.substring(6);
+  command.trim();
+
+  if (command == "SHOW") {
+    printLimitSettings();
+    return true;
+  }
+
+  if (command == "ZERO") {
+    if (zeroMpuArmXAtCurrentRoll()) {
+      respondLine("Arm_X zero offset set from current RawRoll_X.");
+    }
+    else {
+      respondLine("Cannot zero Arm_X because MPU is not ready.");
+    }
+    printLimitSettings();
+    return true;
+  }
+
+  int firstSpace = command.indexOf(' ');
+  if (firstSpace == -1) {
+    respondLine("Invalid limit command. Use: limit show, limit zero, limit offset 1.5, limit min -90, limit max 90, or limit range -90 90");
+    return true;
+  }
+
+  String setting = command.substring(0, firstSpace);
+  String valueText = command.substring(firstSpace + 1);
+  valueText.trim();
+
+  if (setting == "RANGE") {
+    int secondSpace = valueText.indexOf(' ');
+    if (secondSpace == -1) {
+      respondLine("Missing range values. Use: limit range -90 90");
+      return true;
+    }
+
+    String minText = valueText.substring(0, secondSpace);
+    String maxText = valueText.substring(secondSpace + 1);
+    minText.trim();
+    maxText.trim();
+
+    if (!isFloatText(minText) || !isFloatText(maxText)) {
+      respondLine("Invalid range values. Use numbers like: limit range -90 90");
+      return true;
+    }
+
+    float newMin = minText.toFloat();
+    float newMax = maxText.toFloat();
+    if (newMin >= newMax) {
+      respondLine("Invalid range. Min must be smaller than max.");
+      return true;
+    }
+
+    armXMinLimitDeg = newMin;
+    armXMaxLimitDeg = newMax;
+    printLimitSettings();
+    return true;
+  }
+
+  if (!isFloatText(valueText)) {
+    respondLine("Invalid limit value. Use a number like: limit offset 1.5");
+    return true;
+  }
+
+  float value = valueText.toFloat();
+  if (setting == "OFFSET") {
+    setMpuArmXZeroOffsetDeg(value);
+  }
+  else if (setting == "MIN") {
+    if (value >= armXMaxLimitDeg) {
+      respondLine("Invalid min. It must be smaller than the current max.");
+      return true;
+    }
+    armXMinLimitDeg = value;
+  }
+  else if (setting == "MAX") {
+    if (value <= armXMinLimitDeg) {
+      respondLine("Invalid max. It must be larger than the current min.");
+      return true;
+    }
+    armXMaxLimitDeg = value;
+  }
+  else {
+    respondLine("Invalid limit setting. Use OFFSET, MIN, MAX, RANGE, ZERO, or SHOW.");
+    return true;
+  }
+
+  printLimitSettings();
+  return true;
+}
+
+bool handleMpuCommand(String input) {
+  if (input == "MPU SHOW") {
+    printMpuSample();
+    return true;
+  }
+
+  if (input.startsWith("MPU ")) {
+    respondLine("Invalid MPU command. Use: mpu show");
+    return true;
+  }
+
+  return false;
+}
+
+bool isFloatText(String text) {
+  text.trim();
+  if (text.length() == 0) {
+    return false;
+  }
+
+  bool seenDigit = false;
+  bool seenDot = false;
+  for (unsigned int i = 0; i < text.length(); i++) {
+    char c = text.charAt(i);
+    if (c >= '0' && c <= '9') {
+      seenDigit = true;
+    }
+    else if (c == '.' && !seenDot) {
+      seenDot = true;
+    }
+    else if ((c == '-' || c == '+') && i == 0) {
+      // Leading sign is allowed.
+    }
+    else {
+      return false;
+    }
+  }
+  return seenDigit;
+}
+
+void printLimitSettings() {
+  String message = "Limit settings | Offset:";
+  message += String(getMpuArmXZeroOffsetDeg(), 2);
+  message += " Min:";
+  message += String(armXMinLimitDeg, 1);
+  message += " Max:";
+  message += String(armXMaxLimitDeg, 1);
+  if (isMpuReady()) {
+    message += " RawRoll_X:";
+    message += String(getMpuRawRollDeg(), 1);
+    message += " Arm_X:";
+    message += String(getMpuArmXDeg(), 1);
+  }
+  else {
+    message += " MPU:not ready";
+  }
+  respondLine(message);
+}
+
+void printMpuSample() {
+  if (!isMpuReady()) {
+    respondLine("MPU sample | MPU:not ready");
+    return;
+  }
+
+  String message = "MPU sample | RawRoll_X:";
+  message += String(getMpuRawRollDeg(), 1);
+  message += " RelRoll_X:";
+  message += String(getMpuRollDeg(), 1);
+  message += " Arm_X:";
+  message += String(getMpuArmXDeg(), 1);
+  message += " Pitch_Y:";
+  message += String(getMpuPitchDeg(), 1);
+  message += " Yaw_Z:";
+  message += String(getMpuYawDeg(), 1);
+  message += " Offset:";
+  message += String(getMpuArmXZeroOffsetDeg(), 2);
+  message += " Min:";
+  message += String(armXMinLimitDeg, 1);
+  message += " Max:";
+  message += String(armXMaxLimitDeg, 1);
+  respondLine(message);
+}
+
+void respondLine(String message) {
+  Serial.println(message);
+  PiSerial.println(message);
 }

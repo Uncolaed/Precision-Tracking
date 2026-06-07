@@ -1,13 +1,22 @@
 #include <Wire.h>
 
 const uint8_t MPU6050_ADDRESS = 0x68;  // Use 0x69 if the AD0 pin is HIGH.
+const uint8_t MPU_READ_FAILURES_BEFORE_OFFLINE = 5;
+const unsigned long MPU_RETRY_INTERVAL_MS = 1000;
+
+#ifndef DEFAULT_ARM_X_ZERO_OFFSET_DEG
+#define DEFAULT_ARM_X_ZERO_OFFSET_DEG 1.5
+#endif
 
 float mpuAccX, mpuAccY, mpuAccZ;        // g
 float mpuGyroX, mpuGyroY, mpuGyroZ;     // deg/s
 float mpuRoll, mpuPitch, mpuYaw;        // absolute filtered angles
 float mpuGyroErrorX, mpuGyroErrorY, mpuGyroErrorZ;
 float mpuRollOffset, mpuPitchOffset;
+float mpuArmXZeroOffsetDeg = DEFAULT_ARM_X_ZERO_OFFSET_DEG;
 unsigned long mpuPreviousTime;
+unsigned long mpuLastRetryTime = 0;
+uint8_t mpuReadFailureCount = 0;
 bool mpuReady = false;
 
 int16_t readMpu16() {
@@ -92,18 +101,32 @@ bool captureMpuRestingAngle() {
   return true;
 }
 
-bool setupMpu6050() {
+void beginMpuWire() {
+  Wire.setSDA(PB7);
+  Wire.setSCL(PB6);
   Wire.begin();
+  Wire.setClock(100000);
+}
 
+bool wakeMpu6050() {
   Wire.beginTransmission(MPU6050_ADDRESS);
   Wire.write(0x6B);
   Wire.write(0x00);
   if (Wire.endTransmission(true) != 0) {
-    mpuReady = false;
     return false;
   }
 
   delay(100);
+  return true;
+}
+
+bool setupMpu6050() {
+  beginMpuWire();
+
+  if (!wakeMpu6050()) {
+    mpuReady = false;
+    return false;
+  }
 
   if (!calculateMpuGyroError() || !captureMpuRestingAngle()) {
     mpuReady = false;
@@ -111,19 +134,50 @@ bool setupMpu6050() {
   }
 
   mpuPreviousTime = millis();
+  mpuLastRetryTime = 0;
+  mpuReadFailureCount = 0;
   mpuReady = true;
   return true;
 }
 
+void markMpuReadFailure() {
+  if (mpuReadFailureCount < MPU_READ_FAILURES_BEFORE_OFFLINE) {
+    mpuReadFailureCount++;
+  }
+
+  if (mpuReadFailureCount >= MPU_READ_FAILURES_BEFORE_OFFLINE) {
+    mpuReady = false;
+    mpuLastRetryTime = millis();
+  }
+}
+
+void retryMpu6050() {
+  unsigned long now = millis();
+  if (now - mpuLastRetryTime < MPU_RETRY_INTERVAL_MS) {
+    return;
+  }
+
+  mpuLastRetryTime = now;
+  beginMpuWire();
+  if (wakeMpu6050()) {
+    mpuPreviousTime = millis();
+    mpuReadFailureCount = 0;
+    mpuReady = true;
+  }
+}
+
 void updateMpu6050() {
   if (!mpuReady) {
+    retryMpu6050();
     return;
   }
 
   if (!readMpuAccel() || !readMpuGyro()) {
-    mpuReady = false;
+    markMpuReadFailure();
     return;
   }
+
+  mpuReadFailureCount = 0;
 
   unsigned long currentTime = millis();
   float dt = (currentTime - mpuPreviousTime) / 1000.0;
@@ -143,6 +197,31 @@ void updateMpu6050() {
 
 bool isMpuReady() {
   return mpuReady;
+}
+
+float getMpuRawRollDeg() {
+  return mpuRoll;
+}
+
+float getMpuArmXDeg() {
+  return getMpuRawRollDeg() - mpuArmXZeroOffsetDeg;
+}
+
+float getMpuArmXZeroOffsetDeg() {
+  return mpuArmXZeroOffsetDeg;
+}
+
+void setMpuArmXZeroOffsetDeg(float offsetDeg) {
+  mpuArmXZeroOffsetDeg = offsetDeg;
+}
+
+bool zeroMpuArmXAtCurrentRoll() {
+  if (!mpuReady) {
+    return false;
+  }
+
+  setMpuArmXZeroOffsetDeg(getMpuRawRollDeg());
+  return true;
 }
 
 float getMpuRollDeg() {
