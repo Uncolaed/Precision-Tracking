@@ -46,7 +46,7 @@ class ServoUart:
             return
 
         try:
-            self._ser = serial.Serial(port, baud_rate, timeout=0)
+            self._ser = serial.Serial(port, baud_rate, timeout=0.05, write_timeout=1)
             time.sleep(2)
             print(f"[uart] opened {port} @ {baud_rate} baud")
         except serial.SerialException as e:

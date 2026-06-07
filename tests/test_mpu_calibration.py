@@ -51,6 +51,26 @@ def send_and_print(uart, command, sample_after=False):
         print("[stm32] no response")
 
 
+def check_uart_response(uart):
+    uart.read_lines(0.2)
+    uart.send_raw("ping")
+    lines = uart.read_lines(1.0)
+
+    if any("PONG" in line for line in lines):
+        for line in lines:
+            print("[stm32]", line)
+        return True
+
+    print("[warning] STM32 did not reply to ping over Raspberry Pi UART.")
+    print("[warning] If servos still move, Pi TX -> STM32 RX works, but STM32 TX -> Pi RX is not reaching Python.")
+    print("[warning] Check wiring: STM32 PA9 TX -> Pi GPIO15 RX/pin 10, and common GND.")
+    print("[warning] Also make sure you uploaded stm32_firmware/ai_servo/ai_servo.ino, not the old root stm32_firmware/mpulogic.ino.")
+    if lines:
+        for line in lines:
+            print("[stm32]", line)
+    return False
+
+
 def nudge_and_print(uart, axis, direction):
     uart.send_raw(f"{axis} {direction} {CALIBRATION_SPEED}")
     time.sleep(NUDGE_SECONDS)
@@ -93,6 +113,7 @@ def main():
     print(f"Movement nudge: {CALIBRATION_SPEED}% for {NUDGE_SECONDS:.2f}s")
 
     try:
+        check_uart_response(uart)
         send_and_print(uart, "all stop")
         send_and_print(uart, "limit show")
         send_and_print(uart, "mpu show")

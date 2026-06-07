@@ -320,8 +320,14 @@ void parseCommand(String input) {
     return;
   }
 
+  if (input == "PING") {
+    respondLine("PONG ai_servo");
+    return;
+  }
+
   if (input == "ALL STOP" || input == "STOP") {
     stopAllServos();
+    respondLine("OK all stop");
     return;
   }
 
