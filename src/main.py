@@ -17,8 +17,8 @@ from .camera import open_picamera, read_picamera_frame
 from .detection import DetectionSmoother, detect, pick_center_target, pick_best_detection_for_reference
 from .tracking import LockState, ControlMode, init_tracker_on_detection, reset_tracking_state
 from .controller import (
-    PD,
     ServoUart,
+    SmoothAxisController,
     apply_auto_servo_control,
     configure_mpu_limits,
     handle_manual_key,
@@ -68,9 +68,21 @@ def run():
     else:
         kalman = None
 
-    pd_x = PD(config.KP_X, config.KD_X)
-    pd_y = PD(config.KP_Y, config.KD_Y)
-    tracking = reset_tracking_state(smoother, pd_x, pd_y, kalman)
+    controller_x = SmoothAxisController(
+        "base",
+        config.AUTO_BASE_POSITIVE_X_DIR,
+        config.AUTO_SLOW_ZONE_X,
+        config.AUTO_RELEASE_MARGIN_X,
+        config.CENTER_BOX_W // 2,
+    )
+    controller_y = SmoothAxisController(
+        "arm",
+        config.AUTO_ARM_POSITIVE_Y_DIR,
+        config.AUTO_SLOW_ZONE_Y,
+        config.AUTO_RELEASE_MARGIN_Y,
+        config.CENTER_BOX_H // 2,
+    )
+    tracking = reset_tracking_state(smoother, controller_x, controller_y, kalman)
 
     mode = mode_from_config()
     manual_speed = config.MANUAL_SPEED_START
@@ -218,8 +230,8 @@ def run():
                         uart.stop_all(force=True)
                         if kalman:
                             kalman.reset()
-                        pd_x.reset()
-                        pd_y.reset()
+                        controller_x.reset()
+                        controller_y.reset()
 
                     elif detector_misses >= config.DETECTOR_MAX_MISSES:
                         print("[LOCKED to LOST] detector no longer confirms target")
@@ -231,8 +243,8 @@ def run():
                         uart.stop_all(force=True)
                         if kalman:
                             kalman.reset()
-                        pd_x.reset()
-                        pd_y.reset()
+                        controller_x.reset()
+                        controller_y.reset()
 
                 elif state == LockState.LOST:
                     target = None
@@ -258,7 +270,7 @@ def run():
                         if lost_hold <= 0:
                             print("[LOST to IDLE] recovery expired, full reset")
                             trusted_bbox = trusted_class_id = None
-                            tracking = reset_tracking_state(smoother, pd_x, pd_y, kalman)
+                            tracking = reset_tracking_state(smoother, controller_x, controller_y, kalman)
                             state = tracking["state"]
                             tracker = tracking["tracker"]
                             tracker_bbox = tracking["tracker_bbox"]
@@ -281,7 +293,7 @@ def run():
                     else:
                         cx, cy = raw_cx, raw_cy
 
-                    cmd_x, cmd_y, ex, ey, centered = apply_auto_servo_control(uart, pd_x, pd_y, cx, cy, fx, fy)
+                    cmd_x, cmd_y, ex, ey, centered = apply_auto_servo_control(uart, controller_x, controller_y, cx, cy, fx, fy)
                     q = quadrant(cx, cy, fx, fy, config.CENTER_BOX_W, config.CENTER_BOX_H)
 
                     if frame_idx % config.PRINT_EVERY_N == 0:
@@ -337,7 +349,7 @@ def run():
 
             if key == ord("m"):
                 uart.stop_all(force=True)
-                tracking = reset_tracking_state(smoother, pd_x, pd_y, kalman)
+                tracking = reset_tracking_state(smoother, controller_x, controller_y, kalman)
                 manual_active_until = 0.0
                 manual_sent_stop = True
                 mode = next_mode(mode)
@@ -348,7 +360,7 @@ def run():
             elif key == ord("r"):
                 print("[manual] reset requested")
                 uart.stop_all(force=True)
-                tracking = reset_tracking_state(smoother, pd_x, pd_y, kalman)
+                tracking = reset_tracking_state(smoother, controller_x, controller_y, kalman)
                 manual_active_until = 0.0
                 manual_sent_stop = True
 

@@ -53,10 +53,10 @@ def init_tracker_on_detection(frame, det):
     return tracker, bbox
 
 
-def reset_tracking_state(smoother, pd_x, pd_y, kalman):
+def reset_tracking_state(smoother, controller_x, controller_y, kalman):
     smoother.reset()
-    pd_x.reset()
-    pd_y.reset()
+    controller_x.reset()
+    controller_y.reset()
     if kalman:
         kalman.reset()
     return {

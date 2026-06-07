@@ -34,6 +34,80 @@ class PD:
         return self.kp * error + self.kd * derivative
 
 
+class SmoothAxisController:
+    def __init__(self, axis, positive_direction, slow_zone, release_margin_px, deadband_half_px):
+        self.axis = axis
+        self.positive_direction = positive_direction
+        self.slow_zone = max(float(slow_zone), 1e-3)
+        self.release_margin_px = int(release_margin_px)
+        self.deadband_half_px = int(deadband_half_px)
+        self._filtered_error = None
+        self._stopped = True
+        self._last_speed = 0
+        self._last_direction = None
+
+    def reset(self):
+        self._filtered_error = None
+        self._stopped = True
+        self._last_speed = 0
+        self._last_direction = None
+
+    def update(self, uart, pixel_error, normalized_error):
+        alpha = clamp(config.AUTO_ERROR_EMA_ALPHA, 0.0, 1.0)
+        if self._filtered_error is None:
+            self._filtered_error = normalized_error
+        else:
+            self._filtered_error = alpha * normalized_error + (1.0 - alpha) * self._filtered_error
+
+        abs_pixel_error = abs(pixel_error)
+        if abs_pixel_error <= self.deadband_half_px:
+            self._stop(uart)
+            return 0.0
+
+        release_half_px = self.deadband_half_px + self.release_margin_px
+        if self._stopped and abs_pixel_error <= release_half_px:
+            self._stop(uart)
+            return 0.0
+
+        drive_error = self._filtered_error
+        if abs(drive_error) < 1e-4:
+            drive_error = normalized_error
+
+        direction = self.positive_direction if drive_error > 0 else opposite_dir(self.positive_direction)
+        desired_speed = self._speed_from_error(abs(self._filtered_error))
+        speed = self._ramped_speed(direction, desired_speed)
+
+        uart.send_axis(self.axis, direction, speed)
+        self._stopped = False
+        self._last_speed = speed
+        self._last_direction = direction
+
+        signed = 1.0 if direction == self.positive_direction else -1.0
+        return signed * (speed / float(config.AUTO_MAX_SPEED))
+
+    def _speed_from_error(self, abs_error):
+        zone_ratio = clamp(abs_error / self.slow_zone, 0.0, 1.0)
+        curved = zone_ratio ** config.AUTO_SPEED_CURVE
+        speed = config.AUTO_NEAR_MIN_SPEED + curved * (config.AUTO_MAX_SPEED - config.AUTO_NEAR_MIN_SPEED)
+        speed = round_speed(speed, config.SPEED_ROUND_STEP)
+        return int(clamp(speed, config.AUTO_NEAR_MIN_SPEED, config.AUTO_MAX_SPEED))
+
+    def _ramped_speed(self, direction, desired_speed):
+        if self._stopped or direction != self._last_direction:
+            return min(desired_speed, config.AUTO_NEAR_MIN_SPEED)
+
+        if desired_speed > self._last_speed:
+            return min(desired_speed, self._last_speed + config.AUTO_SPEED_RAMP_STEP)
+
+        return desired_speed
+
+    def _stop(self, uart):
+        uart.stop_axis(self.axis)
+        self._stopped = True
+        self._last_speed = 0
+        self._last_direction = None
+
+
 class ServoUart:
     def __init__(self, port, baud_rate, enabled=True):
         self._ser = None
@@ -221,26 +295,12 @@ def command_from_pd(pd_value, positive_direction):
     return direction, speed
 
 
-def apply_auto_servo_control(uart, pd_x, pd_y, cx, cy, fx, fy):
+def apply_auto_servo_control(uart, controller_x, controller_y, cx, cy, fx, fy):
     ex, ey = compute_errors(cx, cy, fx, fy)
     x_dead, y_dead = axis_deadbands(cx, cy, fx, fy)
 
-    cmd_x = 0.0
-    cmd_y = 0.0
-
-    if x_dead:
-        pd_x.reset()
-        uart.stop_axis("base")
-    else:
-        cmd_x = clamp(pd_x.update(ex), -config.MAX_CMD_X, config.MAX_CMD_X)
-        uart.send_axis("base", *command_from_pd(cmd_x, config.AUTO_BASE_POSITIVE_X_DIR))
-
-    if y_dead:
-        pd_y.reset()
-        uart.stop_axis("arm")
-    else:
-        cmd_y = clamp(pd_y.update(ey), -config.MAX_CMD_Y, config.MAX_CMD_Y)
-        uart.send_axis("arm", *command_from_pd(cmd_y, config.AUTO_ARM_POSITIVE_Y_DIR))
+    cmd_x = controller_x.update(uart, cx - fx, ex)
+    cmd_y = controller_y.update(uart, cy - fy, ey)
 
     return cmd_x, cmd_y, ex, ey, x_dead and y_dead
 
