@@ -11,7 +11,7 @@ from src import config
 from src.controller import ServoUart
 
 
-CALIBRATION_SPEED = 10
+CALIBRATION_SPEED = 11
 NUDGE_SECONDS = 0.25
 RESPONSE_SECONDS = 0.7
 
