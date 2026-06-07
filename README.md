@@ -147,6 +147,15 @@ limit range -90 90
 
 `limit zero` sets the current `RawRoll_X` as the zero offset for this run.
 
+The main app can apply configured MPU limits on startup from `src/config.py`:
+
+```python
+MPU_APPLY_LIMITS_ON_START = True
+MPU_ARM_X_OFFSET = 1.5
+MPU_ARM_X_MIN = -90.0
+MPU_ARM_X_MAX = 90.0
+```
+
 ## UART Protocol
 
 The Python code sends newline-terminated text commands, not binary packets.
@@ -239,9 +248,12 @@ python -m src.main
 Keyboard controls:
 
 ```text
-m       switch AUTO/MANUAL mode
+m       cycle AUTO/MANUAL/CALIBRATION mode
 r       reset tracking state
 q/ESC   quit
+c       zero current MPU Arm_X position
+v       reapply configured MPU limits
+b       print one MPU sample
 
 Manual mode:
 w       arm up
@@ -250,7 +262,27 @@ s       arm down
 d       base right
 SPACE   stop all
 +/-     adjust manual speed
+
+Calibration mode:
+w/s     arm up/down at low calibration speed
+a/d     base left/right at low calibration speed
+SPACE   stop all
+z       zero current MPU Arm_X position
+n       set current Arm_X as min limit
+x       set current Arm_X as max limit
+b       print one MPU sample
+v       reapply configured MPU limits
++/-     adjust calibration speed
 ```
+
+MPU calibration workflow:
+
+1. Enter `CALIBRATION` mode with `m`.
+2. Move the arm to the neutral position and press `z`.
+3. Move to the lower physical limit and press `n`.
+4. Move to the upper physical limit and press `x`.
+5. Press `b` to inspect the current MPU values.
+6. Press `m` back to `AUTO`.
 
 ## Manual Hardware Tests
 
